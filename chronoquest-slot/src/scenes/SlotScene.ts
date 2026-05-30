@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 
 import type { GridPosition, SlotGameState, SymbolGrid, SymbolId } from '../game/types';
-import { REEL_LAYOUT } from '../game/reelConfig';
+import { REEL_LAYOUT, getReelWeights } from '../game/reelConfig';
 import { SYMBOLS, SCATTER_ID, WILD_ID } from '../game/symbols';
 import { KEY_BONUS_BET_MULTIPLIER, SUPER_BONUS } from '../game/paytable';
 import {
@@ -15,7 +15,8 @@ import {
   makeInactiveBonus,
 } from '../game/slotEngine';
 import { Hud } from '../ui/Hud';
-import { bonusSound, spinSound, stopSound, winSound } from '../audio/sound';
+import { texKey } from '../ui/symbolTextures';
+import { bonusSound, initAudio, setMuted, spinSound, stopSound, winSound } from '../audio/sound';
 
 // --- Layout constants ---
 const CELL_W = 118;
@@ -23,13 +24,19 @@ const CELL_H = 80;
 const CELL_GAP = 8;
 const REEL_GAP = 14;
 const CENTER_Y = 358;
-const ALL_SYMBOLS = Object.keys(SYMBOLS) as SymbolId[];
+
+// Per-reel pools of symbols that can legally appear on that reel — used so the
+// spin "blur" never flashes a symbol (e.g. a key) on a reel where it can't land.
+const REEL_SYMBOL_POOLS: SymbolId[][] = REEL_LAYOUT.rows.map((_, reel) => {
+  const weights = getReelWeights(reel);
+  return (Object.keys(weights) as SymbolId[]).filter((id) => weights[id] > 0);
+});
 
 const BET_STEPS = [50, 100, 200, 300, 500];
 
 interface Card {
   container: Phaser.GameObjects.Container;
-  bg: Phaser.GameObjects.Graphics;
+  image: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
   symbol: SymbolId;
   glowTween?: Phaser.Tweens.Tween;
@@ -43,6 +50,7 @@ export class SlotScene extends Phaser.Scene {
   private reelX: number[] = [];
   private betIndex = 1; // default 100
   private auto = false;
+  private muted = false;
   private reelsDone = 0;
   private flashRect?: Phaser.GameObjects.Rectangle;
 
@@ -79,6 +87,7 @@ export class SlotScene extends Phaser.Scene {
       onSpin: () => this.onSpinClicked(),
       onToggleAuto: () => this.toggleAuto(),
       onBetChange: (d) => this.changeBet(d),
+      onToggleMute: () => this.toggleMute(),
     });
     this.hud.update(this.state);
   }
@@ -142,12 +151,18 @@ export class SlotScene extends Phaser.Scene {
       for (let row = 0; row < rowCount; row++) {
         const x = this.reelX[reel];
         const y = this.rowY(reel, row);
-        const bg = this.add.graphics();
+        const image = this.add
+          .image(0, 0, texKey('TEN'))
+          .setDisplaySize(CELL_W - 4, CELL_H - 4);
         const label = this.add
-          .text(0, 0, '', { fontFamily: 'Arial Black, sans-serif', fontSize: '20px', color: '#ffffff' })
+          .text(0, 0, '', {
+            fontFamily: 'Arial Black, sans-serif',
+            fontSize: '20px',
+            color: '#ffffff',
+          })
           .setOrigin(0.5);
-        const container = this.add.container(x, y, [bg, label]).setDepth(10);
-        column.push({ container, bg, label, symbol: 'TEN' });
+        const container = this.add.container(x, y, [image, label]).setDepth(10);
+        column.push({ container, image, label, symbol: 'TEN' });
       }
       this.cards.push(column);
     });
@@ -155,24 +170,23 @@ export class SlotScene extends Phaser.Scene {
 
   private drawCardFace(card: Card, symbol: SymbolId): void {
     const def = SYMBOLS[symbol];
-    const big = symbol === WILD_ID || symbol === SCATTER_ID;
-    const w = CELL_W - 6;
-    const h = CELL_H - 6;
-    const g = card.bg;
-    g.clear();
-    g.fillStyle(def.color, 1);
-    g.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
-    g.lineStyle(big ? 4 : 2, def.glow, big ? 1 : 0.8);
-    g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
-    if (big) {
-      // Inner accent ring for special symbols.
-      g.lineStyle(2, def.glow, 0.4);
-      g.strokeRoundedRect(-w / 2 + 6, -h / 2 + 6, w - 12, h - 12, 9);
+    card.image.setTexture(texKey(symbol)).setDisplaySize(CELL_W - 4, CELL_H - 4);
+
+    // Low symbols show a big centered letter; everything else shows its emblem
+    // (baked into the texture) with a small caption underneath.
+    if (def.category === 'low') {
+      card.label
+        .setText(def.label)
+        .setColor(rgbToCss(def.glow))
+        .setFontSize(34)
+        .setPosition(0, 0);
+    } else {
+      card.label
+        .setText(def.label)
+        .setColor(rgbToCss(def.glow))
+        .setFontSize(12)
+        .setPosition(0, CELL_H / 2 - 14);
     }
-    card.label
-      .setText(def.label)
-      .setColor(rgbToCss(def.glow))
-      .setFontSize(big ? 22 : 18);
     card.symbol = symbol;
   }
 
@@ -189,15 +203,24 @@ export class SlotScene extends Phaser.Scene {
   // --- Input ---------------------------------------------------------------
 
   private onSpinClicked(): void {
+    initAudio(); // unlock audio on the first user gesture
     if (this.state.spinning || this.state.bonus.active) return;
     this.doSpin(false);
   }
 
   private toggleAuto(): void {
+    initAudio();
     if (this.state.bonus.active) return;
     this.auto = !this.auto;
     this.hud.setAutoActive(this.auto);
     if (this.auto && !this.state.spinning) this.doSpin(false);
+  }
+
+  private toggleMute(): void {
+    initAudio();
+    this.muted = !this.muted;
+    setMuted(this.muted);
+    this.hud.setMuted(this.muted);
   }
 
   private changeBet(delta: number): void {
@@ -261,8 +284,9 @@ export class SlotScene extends Phaser.Scene {
   }
 
   private setReelRandom(reel: number): void {
+    const pool = REEL_SYMBOL_POOLS[reel];
     this.cards[reel].forEach((card) => {
-      const sym = ALL_SYMBOLS[Math.floor(Math.random() * ALL_SYMBOLS.length)];
+      const sym = pool[Math.floor(Math.random() * pool.length)];
       this.drawCardFace(card, sym);
     });
   }

@@ -38,11 +38,12 @@ npm run test     # run the Vitest engine test-suite
 | HUD (credits, bet, win, buttons) | `src/ui/Hud.ts` |
 | **Pure math engine** | `src/game/slotEngine.ts` |
 | Types / interfaces | `src/game/types.ts` |
-| Symbol catalogue + placeholder art | `src/game/symbols.ts` |
+| Symbol catalogue + colors/labels | `src/game/symbols.ts` |
+| Procedural sprite-texture generator | `src/ui/symbolTextures.ts` |
 | Reel layout + symbol weights | `src/game/reelConfig.ts` |
 | Paytable + bonus config | `src/game/paytable.ts` |
 | RNG wrapper (swappable) | `src/game/rng.ts` |
-| Sound hooks (no-op placeholders) | `src/audio/sound.ts` |
+| Procedural audio (Web Audio API) | `src/audio/sound.ts` |
 | Engine tests | `tests/engine.test.ts` |
 
 The engine in `src/game/` has **no Phaser imports**, so all math is unit-testable
@@ -97,23 +98,31 @@ uses `DefaultRng` (Math.random); tests use the deterministic `SeededRng`. Replac
 
 ---
 
-## Replacing the placeholder art
+## Art & audio
 
-Symbols currently render as glowing rounded "cards" drawn with Phaser graphics,
-using the `label`/`color`/`glow` fields in `src/game/symbols.ts`.
+**Art** is generated procedurally — no image files. `src/ui/symbolTextures.ts`
+draws each symbol once with Phaser Graphics (gradient card, glow ring, and a
+distinct vector emblem per symbol) and bakes it into a cached texture in
+`BootScene`. The reels are lightweight `Image` sprites that swap textures via
+`texKey(id)`. Tweak the look by editing `symbolTextures.ts` (emblems) and the
+`color`/`glow`/`label` fields in `src/game/symbols.ts`.
 
-To use real art later:
-1. Preload textures in `BootScene` (e.g. `this.load.image('A', 'assets/a.png')`).
-2. In `SlotScene.drawCardFace`, swap the graphics drawing for a
-   `this.add.image(...)` / sprite keyed by `symbol`.
-3. Optionally add real audio in `src/audio/sound.ts` (the `spinSound`,
-   `stopSound`, `winSound`, `bonusSound` hooks are already wired into the scene).
+To drop in **real PNG art** later: preload your images in `BootScene` using the
+same keys (`texKey(id)`) and skip the `generateSymbolTextures(this)` call — the
+scene needs no other changes.
+
+**Audio** is synthesized at runtime with the Web Audio API (`src/audio/sound.ts`)
+— oscillators + filtered noise for spin / reel-stop / win / bonus cues, so there
+are no audio files to ship. A **SOUND** toggle (top-left) mutes everything.
+Browsers require a user gesture before audio can start, so `initAudio()` is
+called on the first Spin/Auto click. To use real audio samples instead, load
+them in `BootScene` and play them inside these same four hook functions.
 
 ---
 
 ## Ideas for what to improve next
 
-- Real sprite/animation art + particle effects and audio.
+- Particle effects and a layered music track on top of the procedural SFX.
 - Reel-strip based spinning (true scrolling strips) instead of symbol cycling.
 - Win-line / ways highlighting overlays and a paytable info screen.
 - Configurable autoplay (spin count, stop-on-win/bonus).
