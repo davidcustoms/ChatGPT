@@ -1,0 +1,508 @@
+import Phaser from 'phaser';
+
+import type { GridPosition, SlotGameState, SymbolGrid, SymbolId } from '../game/types';
+import { REEL_LAYOUT } from '../game/reelConfig';
+import { SYMBOLS, SCATTER_ID, WILD_ID } from '../game/symbols';
+import { KEY_BONUS_BET_MULTIPLIER, SUPER_BONUS } from '../game/paytable';
+import {
+  applyStickyWilds,
+  calculateWildMultiplier,
+  createSpinResult,
+  detectKeys,
+  evaluateBonusTrigger,
+  evaluateSpin,
+  getSymbolGrid,
+  makeInactiveBonus,
+} from '../game/slotEngine';
+import { Hud } from '../ui/Hud';
+import { bonusSound, spinSound, stopSound, winSound } from '../audio/sound';
+
+// --- Layout constants ---
+const CELL_W = 118;
+const CELL_H = 80;
+const CELL_GAP = 8;
+const REEL_GAP = 14;
+const CENTER_Y = 358;
+const ALL_SYMBOLS = Object.keys(SYMBOLS) as SymbolId[];
+
+const BET_STEPS = [50, 100, 200, 300, 500];
+
+interface Card {
+  container: Phaser.GameObjects.Container;
+  bg: Phaser.GameObjects.Graphics;
+  label: Phaser.GameObjects.Text;
+  symbol: SymbolId;
+  glowTween?: Phaser.Tweens.Tween;
+  pulseTween?: Phaser.Tweens.Tween;
+}
+
+export class SlotScene extends Phaser.Scene {
+  private state!: SlotGameState;
+  private hud!: Hud;
+  private cards: Card[][] = [];
+  private reelX: number[] = [];
+  private betIndex = 1; // default 100
+  private auto = false;
+  private reelsDone = 0;
+  private flashRect?: Phaser.GameObjects.Rectangle;
+
+  constructor() {
+    super('SlotScene');
+  }
+
+  create(): void {
+    this.cameras.main.fadeIn(300);
+
+    this.state = {
+      credits: 10000,
+      bet: BET_STEPS[this.betIndex],
+      lastWin: 0,
+      spinning: false,
+      message: 'Spin to begin your ChronoQuest!',
+      bonus: makeInactiveBonus(),
+    };
+
+    this.drawBackground();
+    this.computeReelGeometry();
+    this.drawReelFrame();
+    this.buildCards();
+
+    // Initial grid (visual only — no win evaluation).
+    this.renderGrid(getSymbolGrid(REEL_LAYOUT));
+
+    this.flashRect = this.add
+      .rectangle(this.scale.width / 2, this.scale.height / 2, this.scale.width, this.scale.height, 0x4affff)
+      .setAlpha(0)
+      .setDepth(80);
+
+    this.hud = new Hud(this, {
+      onSpin: () => this.onSpinClicked(),
+      onToggleAuto: () => this.toggleAuto(),
+      onBetChange: (d) => this.changeBet(d),
+    });
+    this.hud.update(this.state);
+  }
+
+  // --- Rendering -----------------------------------------------------------
+
+  private drawBackground(): void {
+    const { width, height } = this.scale;
+    const bg = this.add.graphics().setDepth(0);
+    bg.fillGradientStyle(0x070a1c, 0x070a1c, 0x12082e, 0x0a1330, 1);
+    bg.fillRect(0, 0, width, height);
+
+    // Faint neon grid lines for a futuristic vibe.
+    const grid = this.add.graphics().setDepth(1).setAlpha(0.12);
+    grid.lineStyle(1, 0x4affff, 1);
+    for (let x = 0; x <= width; x += 64) {
+      grid.lineBetween(x, 100, x, height - 130);
+    }
+    for (let y = 100; y <= height - 130; y += 64) {
+      grid.lineBetween(0, y, width, y);
+    }
+  }
+
+  private computeReelGeometry(): void {
+    const reels = REEL_LAYOUT.rows.length;
+    const totalW = reels * CELL_W + (reels - 1) * REEL_GAP;
+    const startX = this.scale.width / 2 - totalW / 2;
+    this.reelX = [];
+    for (let r = 0; r < reels; r++) {
+      this.reelX.push(startX + r * (CELL_W + REEL_GAP) + CELL_W / 2);
+    }
+  }
+
+  private rowY(reel: number, row: number): number {
+    const n = REEL_LAYOUT.rows[reel];
+    const totalH = n * CELL_H + (n - 1) * CELL_GAP;
+    const top = CENTER_Y - totalH / 2;
+    return top + row * (CELL_H + CELL_GAP) + CELL_H / 2;
+  }
+
+  private drawReelFrame(): void {
+    const reels = REEL_LAYOUT.rows.length;
+    const totalW = reels * CELL_W + (reels - 1) * REEL_GAP;
+    const startX = this.scale.width / 2 - totalW / 2;
+    const maxRows = Math.max(...REEL_LAYOUT.rows);
+    const frameH = maxRows * CELL_H + (maxRows - 1) * CELL_GAP + 40;
+
+    const frame = this.add.graphics().setDepth(2);
+    frame.fillStyle(0x0a0e24, 0.7);
+    frame.fillRoundedRect(startX - 24, CENTER_Y - frameH / 2, totalW + 48, frameH, 24);
+    frame.lineStyle(4, 0x4affff, 0.8);
+    frame.strokeRoundedRect(startX - 24, CENTER_Y - frameH / 2, totalW + 48, frameH, 24);
+    frame.lineStyle(2, 0xff2fb0, 0.4);
+    frame.strokeRoundedRect(startX - 16, CENTER_Y - frameH / 2 + 8, totalW + 32, frameH - 16, 20);
+  }
+
+  private buildCards(): void {
+    this.cards = [];
+    REEL_LAYOUT.rows.forEach((rowCount, reel) => {
+      const column: Card[] = [];
+      for (let row = 0; row < rowCount; row++) {
+        const x = this.reelX[reel];
+        const y = this.rowY(reel, row);
+        const bg = this.add.graphics();
+        const label = this.add
+          .text(0, 0, '', { fontFamily: 'Arial Black, sans-serif', fontSize: '20px', color: '#ffffff' })
+          .setOrigin(0.5);
+        const container = this.add.container(x, y, [bg, label]).setDepth(10);
+        column.push({ container, bg, label, symbol: 'TEN' });
+      }
+      this.cards.push(column);
+    });
+  }
+
+  private drawCardFace(card: Card, symbol: SymbolId): void {
+    const def = SYMBOLS[symbol];
+    const big = symbol === WILD_ID || symbol === SCATTER_ID;
+    const w = CELL_W - 6;
+    const h = CELL_H - 6;
+    const g = card.bg;
+    g.clear();
+    g.fillStyle(def.color, 1);
+    g.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
+    g.lineStyle(big ? 4 : 2, def.glow, big ? 1 : 0.8);
+    g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
+    if (big) {
+      // Inner accent ring for special symbols.
+      g.lineStyle(2, def.glow, 0.4);
+      g.strokeRoundedRect(-w / 2 + 6, -h / 2 + 6, w - 12, h - 12, 9);
+    }
+    card.label
+      .setText(def.label)
+      .setColor(rgbToCss(def.glow))
+      .setFontSize(big ? 22 : 18);
+    card.symbol = symbol;
+  }
+
+  private renderGrid(grid: SymbolGrid): void {
+    grid.forEach((reel, r) => {
+      reel.forEach((sym, row) => {
+        if (this.cards[r] && this.cards[r][row]) {
+          this.drawCardFace(this.cards[r][row], sym);
+        }
+      });
+    });
+  }
+
+  // --- Input ---------------------------------------------------------------
+
+  private onSpinClicked(): void {
+    if (this.state.spinning || this.state.bonus.active) return;
+    this.doSpin(false);
+  }
+
+  private toggleAuto(): void {
+    if (this.state.bonus.active) return;
+    this.auto = !this.auto;
+    this.hud.setAutoActive(this.auto);
+    if (this.auto && !this.state.spinning) this.doSpin(false);
+  }
+
+  private changeBet(delta: number): void {
+    if (this.state.spinning || this.state.bonus.active) return;
+    this.betIndex = Phaser.Math.Clamp(this.betIndex + delta, 0, BET_STEPS.length - 1);
+    this.state.bet = BET_STEPS[this.betIndex];
+    this.hud.update(this.state);
+  }
+
+  // --- Spin lifecycle ------------------------------------------------------
+
+  private doSpin(isFree: boolean): void {
+    if (this.state.spinning) return;
+
+    if (!isFree && !this.state.bonus.active) {
+      if (this.state.credits < this.state.bet) {
+        this.state.message = 'Not enough credits — lower your bet.';
+        this.auto = false;
+        this.hud.setAutoActive(false);
+        this.hud.update(this.state);
+        return;
+      }
+      this.state.credits -= this.state.bet;
+    }
+
+    this.state.spinning = true;
+    this.state.lastWin = 0;
+    this.hud.setSpinEnabled(false);
+    this.hud.setMultiplier(1);
+    this.clearHighlights();
+    spinSound();
+    this.hud.update(this.state);
+
+    const result = createSpinResult(this.state.bonus);
+    this.animateReels(result.grid, () => this.resolveSpin(result.grid));
+  }
+
+  private animateReels(finalGrid: SymbolGrid, onComplete: () => void): void {
+    this.reelsDone = 0;
+    const reels = REEL_LAYOUT.rows.length;
+
+    for (let r = 0; r < reels; r++) {
+      const spinDuration = 350 + r * 220;
+      const ticker = this.time.addEvent({
+        delay: 55,
+        loop: true,
+        callback: () => this.setReelRandom(r),
+      });
+
+      this.time.delayedCall(spinDuration, () => {
+        ticker.remove();
+        this.setReelFinal(r, finalGrid);
+        stopSound();
+        this.bounceReel(r);
+        this.reelsDone++;
+        if (this.reelsDone === reels) {
+          this.time.delayedCall(120, onComplete);
+        }
+      });
+    }
+  }
+
+  private setReelRandom(reel: number): void {
+    this.cards[reel].forEach((card) => {
+      const sym = ALL_SYMBOLS[Math.floor(Math.random() * ALL_SYMBOLS.length)];
+      this.drawCardFace(card, sym);
+    });
+  }
+
+  private setReelFinal(reel: number, grid: SymbolGrid): void {
+    this.cards[reel].forEach((card, row) => {
+      this.drawCardFace(card, grid[reel][row]);
+    });
+  }
+
+  private bounceReel(reel: number): void {
+    this.cards[reel].forEach((card) => {
+      card.container.setScale(1, 0.7);
+      this.tweens.add({ targets: card.container, scaleY: 1, duration: 220, ease: 'Back.easeOut' });
+    });
+  }
+
+  private resolveSpin(grid: SymbolGrid): void {
+    const wasInBonus = this.state.bonus.active;
+
+    // Sticky wilds persist & accumulate during the bonus.
+    if (wasInBonus) {
+      this.state.bonus.stickyWilds = applyStickyWilds(grid, this.state.bonus.stickyWilds);
+      this.renderGrid(grid); // reflect any newly stamped wilds
+    }
+
+    const baseMult = wasInBonus ? this.state.bonus.baseMultiplier : 1;
+    const multiplier = calculateWildMultiplier(grid, baseMult);
+    this.hud.setMultiplier(multiplier);
+
+    const evaluation = evaluateSpin(grid, this.state.bet, multiplier);
+    const keys = detectKeys(grid);
+
+    const messages: string[] = [];
+    let win = evaluation.totalWin;
+
+    // Past + Future key instant award.
+    if (keys.bothPresent) {
+      const keyBonus = KEY_BONUS_BET_MULTIPLIER * this.state.bet;
+      win += keyBonus;
+      messages.push(`Timeline Keys Unlocked! +${keyBonus.toLocaleString()}`);
+      this.glowPositions([
+        ...this.findSymbol(grid, 'PAST_KEY'),
+        ...this.findSymbol(grid, 'FUTURE_KEY'),
+      ]);
+    }
+
+    win = Math.round(win);
+    this.state.credits += win;
+    this.state.lastWin = win;
+
+    // Highlight winning positions + glow specials.
+    const winPositions = evaluation.wins.flatMap((w) => w.positions);
+    this.pulsePositions(winPositions);
+    this.glowPositions(this.findSymbol(grid, SCATTER_ID));
+    this.glowPositions(this.findSymbol(grid, WILD_ID));
+
+    if (win > 0) {
+      winSound();
+      messages.unshift(`WIN ${win.toLocaleString()}${multiplier > 1 ? `  (x${multiplier})` : ''}`);
+    }
+
+    // Big win celebration.
+    if (win >= this.state.bet * 20) {
+      this.showBigWin(win);
+    }
+
+    // Bonus trigger / progression.
+    if (!wasInBonus) {
+      const trig = evaluateBonusTrigger(grid);
+      if (trig.triggered) {
+        this.state.bonus = trig.bonus;
+        // Any wild on the triggering grid becomes sticky immediately.
+        this.state.bonus.stickyWilds = applyStickyWilds(grid, []);
+        bonusSound();
+        this.flashScreen();
+        messages.push(
+          trig.isSuper
+            ? `★ CHRONO SHOWDOWN! ${trig.freeSpinsAwarded} free spins · starting x${SUPER_BONUS.startMultiplier} ★`
+            : `Time Portal! ${trig.freeSpinsAwarded} free spins awarded!`,
+        );
+        // Manual play is locked during the bonus.
+        this.auto = false;
+        this.hud.setAutoActive(false);
+      }
+    } else {
+      this.state.bonus.freeSpins -= 1;
+    }
+
+    this.state.message = messages.length ? messages.join('   ·   ') : 'No win — spin again!';
+    this.state.spinning = false;
+    this.hud.update(this.state);
+
+    this.scheduleNext();
+  }
+
+  private scheduleNext(): void {
+    if (this.state.bonus.active) {
+      if (this.state.bonus.freeSpins > 0) {
+        this.time.delayedCall(950, () => this.doSpin(true));
+      } else {
+        this.time.delayedCall(1100, () => this.endBonus());
+      }
+      return;
+    }
+
+    if (this.auto) {
+      if (this.state.credits >= this.state.bet) {
+        this.time.delayedCall(650, () => {
+          if (this.auto && !this.state.spinning) this.doSpin(false);
+        });
+        return;
+      }
+      this.auto = false;
+      this.hud.setAutoActive(false);
+    }
+
+    this.hud.setSpinEnabled(true);
+  }
+
+  private endBonus(): void {
+    const wasSuper = this.state.bonus.isSuperBonus;
+    this.state.bonus = makeInactiveBonus();
+    this.state.message = wasSuper
+      ? 'Chrono Showdown complete — winnings secured!'
+      : 'Bonus complete — back to base game.';
+    this.hud.setMultiplier(1);
+    this.hud.update(this.state);
+    this.hud.setSpinEnabled(true);
+  }
+
+  // --- Highlight / FX ------------------------------------------------------
+
+  private findSymbol(grid: SymbolGrid, symbol: SymbolId): GridPosition[] {
+    const out: GridPosition[] = [];
+    grid.forEach((reel, r) =>
+      reel.forEach((s, row) => {
+        if (s === symbol) out.push({ reel: r, row });
+      }),
+    );
+    return out;
+  }
+
+  private cardAt(pos: GridPosition): Card | undefined {
+    return this.cards[pos.reel]?.[pos.row];
+  }
+
+  private pulsePositions(positions: GridPosition[]): void {
+    const seen = new Set<string>();
+    for (const pos of positions) {
+      const key = `${pos.reel}:${pos.row}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const card = this.cardAt(pos);
+      if (!card) continue;
+      card.pulseTween = this.tweens.add({
+        targets: card.container,
+        scale: 1.12,
+        duration: 380,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
+  }
+
+  private glowPositions(positions: GridPosition[]): void {
+    for (const pos of positions) {
+      const card = this.cardAt(pos);
+      if (!card) continue;
+      card.glowTween = this.tweens.add({
+        targets: card.container,
+        alpha: 0.55,
+        duration: 500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
+  }
+
+  private clearHighlights(): void {
+    for (const column of this.cards) {
+      for (const card of column) {
+        card.pulseTween?.remove();
+        card.glowTween?.remove();
+        card.pulseTween = undefined;
+        card.glowTween = undefined;
+        card.container.setScale(1).setAlpha(1);
+      }
+    }
+  }
+
+  private flashScreen(): void {
+    if (!this.flashRect) return;
+    this.flashRect.setAlpha(0);
+    this.tweens.add({
+      targets: this.flashRect,
+      alpha: 0.6,
+      duration: 120,
+      yoyo: true,
+      repeat: 2,
+      ease: 'Sine.easeInOut',
+    });
+  }
+
+  private showBigWin(win: number): void {
+    const { width, height } = this.scale;
+    const text = this.add
+      .text(width / 2, height / 2 - 40, `BIG WIN!\n${win.toLocaleString()}`, {
+        fontFamily: 'Arial Black, sans-serif',
+        fontSize: '64px',
+        color: '#ffcc33',
+        align: 'center',
+        stroke: '#5a0e3a',
+        strokeThickness: 10,
+      })
+      .setOrigin(0.5)
+      .setDepth(90)
+      .setScale(0.2);
+
+    this.tweens.add({
+      targets: text,
+      scale: 1,
+      duration: 450,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: text,
+          alpha: 0,
+          delay: 1100,
+          duration: 500,
+          onComplete: () => text.destroy(),
+        });
+      },
+    });
+  }
+}
+
+// Convert a 0xRRGGBB number to a CSS hex string for Phaser text colors.
+function rgbToCss(color: number): string {
+  return `#${color.toString(16).padStart(6, '0')}`;
+}
