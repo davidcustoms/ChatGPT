@@ -1,0 +1,29 @@
+{
+  "name": "chronoquest-team-showdown",
+  "version": "1.0.0",
+  "description": "ChronoQuest: Team Showdown — an original, free-play slot machine demo built with Phaser + TypeScript + Vite.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "phaser",
+    "slot",
+    "demo",
+    "free-play",
+    "typescript",
+    "vite"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.0",
+    "vitest": "^1.6.0"
+  },
+  "dependencies": {
+    "phaser": "^3.80.1"
+  }
+}

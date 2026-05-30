@@ -1,0 +1,74 @@
+:root {
+  --bg: #05060f;
+  --neon-cyan: #4affff;
+  --neon-pink: #ff2fb0;
+  --neon-purple: #8a4aff;
+  --gold: #ffcc33;
+  --muted: #6a7ba8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: radial-gradient(circle at 50% 0%, #12082e 0%, var(--bg) 60%);
+  color: #e8ecff;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 100vh;
+  padding: 12px;
+}
+
+.title-bar {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.title-bar h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 12px rgba(74, 255, 255, 0.6);
+}
+
+.title-bar h1 .accent {
+  color: var(--neon-pink);
+  text-shadow: 0 0 12px rgba(255, 47, 176, 0.6);
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+
+#game-container {
+  width: 1280px;
+  max-width: 100vw;
+  aspect-ratio: 16 / 9;
+  border: 2px solid rgba(74, 255, 255, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 0 40px rgba(74, 255, 255, 0.15), inset 0 0 60px rgba(138, 74, 255, 0.08);
+  overflow: hidden;
+}
+
+#game-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
