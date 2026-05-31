@@ -11,6 +11,7 @@ export interface HudCallbacks {
   onToggleAuto: () => void;
   onBetChange: (delta: number) => void;
   onToggleMute: () => void;
+  onInfo: () => void;
 }
 
 const PANEL = 0x0a0e24;
@@ -122,6 +123,10 @@ export class Hud {
     );
     this.muteLabel = muteButton.getData('label');
     this.muteLabel.setFontSize(15);
+
+    // --- Info / paytable button (top-left, next to mute) ---
+    const infoButton = this.makeButton(202, 36, 92, 40, 'ⓘ INFO', GOLD, () => this.cb.onInfo());
+    (infoButton.getData('label') as Phaser.GameObjects.Text).setFontSize(15);
   }
 
   private makeStat(x: number, y: number, label: string, color: string): Phaser.GameObjects.Text {

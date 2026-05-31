@@ -95,6 +95,7 @@ export class SlotScene extends Phaser.Scene {
       onToggleAuto: () => this.toggleAuto(),
       onBetChange: (d) => this.changeBet(d),
       onToggleMute: () => this.toggleMute(),
+      onInfo: () => this.openInfo(),
     });
     this.hud.update(this.state);
   }
@@ -228,6 +229,12 @@ export class SlotScene extends Phaser.Scene {
     this.muted = !this.muted;
     setMuted(this.muted);
     this.hud.setMuted(this.muted);
+  }
+
+  private openInfo(): void {
+    // Pause the base game (also halts free-spin timers) while the overlay is up.
+    this.scene.launch('InfoScene');
+    this.scene.pause();
   }
 
   private changeBet(delta: number): void {
