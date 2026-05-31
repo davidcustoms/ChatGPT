@@ -14,12 +14,23 @@ import {
   getSymbolGrid,
   makeInactiveBonus,
 } from '../game/slotEngine';
-import { Hud } from '../ui/Hud';
+import { Hud, type AutoOptions } from '../ui/Hud';
 import { Background } from '../ui/Background';
 import { texKey } from '../ui/symbolTextures';
 import { FX_SPARK, FX_STAR } from '../ui/fxTextures';
 import type { BonusIntroData } from './BonusIntroScene';
-import { bonusSound, initAudio, setMuted, spinSound, stopSound, winSound } from '../audio/sound';
+import {
+  bigWinSound,
+  bonusSound,
+  initAudio,
+  setMuted,
+  setMusicMode,
+  spinSound,
+  startMusic,
+  stopSound,
+  winSound,
+} from '../audio/sound';
+import { loadSave, writeSave } from '../game/persistence';
 
 // --- Layout constants ---
 const CELL_W = 118;
@@ -36,6 +47,7 @@ const REEL_SYMBOL_POOLS: SymbolId[][] = REEL_LAYOUT.rows.map((_, reel) => {
 });
 
 const BET_STEPS = [50, 100, 200, 300, 500];
+const STARTING_CREDITS = 10000;
 
 interface Card {
   container: Phaser.GameObjects.Container;
@@ -53,6 +65,9 @@ export class SlotScene extends Phaser.Scene {
   private reelX: number[] = [];
   private betIndex = 1; // default 100
   private auto = false;
+  private autoRemaining = 0;
+  private autoStopOnWin = false;
+  private autoStopOnBonus = true;
   private muted = false;
   private reelsDone = 0;
   private flashRect?: Phaser.GameObjects.Rectangle;
@@ -69,14 +84,24 @@ export class SlotScene extends Phaser.Scene {
   create(): void {
     this.cameras.main.fadeIn(300);
 
+    // Restore a saved session (fake credits, bet level, mute) if present.
+    const saved = loadSave();
+    if (saved) {
+      this.betIndex = Phaser.Math.Clamp(saved.betIndex, 0, BET_STEPS.length - 1);
+      this.muted = saved.muted;
+    }
+
     this.state = {
-      credits: 10000,
+      credits: saved ? saved.credits : STARTING_CREDITS,
       bet: BET_STEPS[this.betIndex],
       lastWin: 0,
       spinning: false,
       message: 'Spin to begin your ChronoQuest!',
       bonus: makeInactiveBonus(),
     };
+
+    // Apply restored mute preference (also primes audio's initial gain).
+    setMuted(this.muted);
 
     this.drawBackground();
     this.computeReelGeometry();
@@ -95,12 +120,29 @@ export class SlotScene extends Phaser.Scene {
 
     this.hud = new Hud(this, {
       onSpin: () => this.onSpinClicked(),
-      onToggleAuto: () => this.toggleAuto(),
+      onStartAuto: (opts) => this.startAuto(opts),
+      onStopAuto: () => this.stopAuto(),
       onBetChange: (d) => this.changeBet(d),
       onToggleMute: () => this.toggleMute(),
       onInfo: () => this.openInfo(),
+      onReset: () => this.resetBalance(),
     });
     this.hud.update(this.state);
+    this.hud.setMuted(this.muted);
+  }
+
+  private persist(): void {
+    writeSave({ credits: this.state.credits, betIndex: this.betIndex, muted: this.muted });
+  }
+
+  private resetBalance(): void {
+    if (this.state.spinning || this.state.bonus.active) return;
+    this.state.credits = STARTING_CREDITS;
+    this.state.lastWin = 0;
+    this.state.message = 'Balance reset to 10,000 fake credits.';
+    this.persist();
+    this.hud.update(this.state);
+    this.hud.setWin(0);
   }
 
   // --- Rendering -----------------------------------------------------------
@@ -301,16 +343,31 @@ export class SlotScene extends Phaser.Scene {
 
   private onSpinClicked(): void {
     initAudio(); // unlock audio on the first user gesture
+    startMusic();
     if (this.state.spinning || this.state.bonus.active) return;
     this.doSpin(false);
   }
 
-  private toggleAuto(): void {
+  private startAuto(opts: AutoOptions): void {
     initAudio();
-    if (this.state.bonus.active) return;
-    this.auto = !this.auto;
-    this.hud.setAutoActive(this.auto);
-    if (this.auto && !this.state.spinning) this.doSpin(false);
+    startMusic();
+    if (this.state.bonus.active || this.state.spinning) return;
+    if (this.state.credits < this.state.bet) {
+      this.state.message = 'Not enough credits — lower your bet.';
+      this.hud.update(this.state);
+      return;
+    }
+    this.auto = true;
+    this.autoRemaining = opts.count;
+    this.autoStopOnWin = opts.stopOnWin;
+    this.autoStopOnBonus = opts.stopOnBonus;
+    this.hud.setAutoRunning(this.autoRemaining);
+    this.doSpin(false);
+  }
+
+  private stopAuto(): void {
+    this.auto = false;
+    this.hud.setAutoRunning(null);
   }
 
   private toggleMute(): void {
@@ -318,6 +375,7 @@ export class SlotScene extends Phaser.Scene {
     this.muted = !this.muted;
     setMuted(this.muted);
     this.hud.setMuted(this.muted);
+    this.persist();
   }
 
   private openInfo(): void {
@@ -331,6 +389,7 @@ export class SlotScene extends Phaser.Scene {
     this.betIndex = Phaser.Math.Clamp(this.betIndex + delta, 0, BET_STEPS.length - 1);
     this.state.bet = BET_STEPS[this.betIndex];
     this.hud.update(this.state);
+    this.persist();
   }
 
   // --- Spin lifecycle ------------------------------------------------------
@@ -341,8 +400,7 @@ export class SlotScene extends Phaser.Scene {
     if (!isFree && !this.state.bonus.active) {
       if (this.state.credits < this.state.bet) {
         this.state.message = 'Not enough credits — lower your bet.';
-        this.auto = false;
-        this.hud.setAutoActive(false);
+        this.stopAuto();
         this.hud.update(this.state);
         return;
       }
@@ -555,15 +613,13 @@ export class SlotScene extends Phaser.Scene {
         // Any wild on the triggering grid becomes sticky immediately.
         this.state.bonus.stickyWilds = applyStickyWilds(grid, []);
         bonusSound();
+        setMusicMode('bonus');
         this.flashScreen();
         messages.push(
           trig.isSuper
             ? `★ CHRONO SHOWDOWN! ${trig.freeSpinsAwarded} free spins · starting x${SUPER_BONUS.startMultiplier} ★`
             : `Time Portal! ${trig.freeSpinsAwarded} free spins awarded!`,
         );
-        // Manual play is locked during the bonus.
-        this.auto = false;
-        this.hud.setAutoActive(false);
       }
     } else {
       this.state.bonus.freeSpins -= 1;
@@ -574,6 +630,13 @@ export class SlotScene extends Phaser.Scene {
     this.hud.update(this.state);
     if (win > 0) this.hud.animateWin(win);
     else this.hud.setWin(0);
+    this.persist();
+
+    // Count this base spin against the autoplay budget.
+    if (this.auto && !wasInBonus) {
+      this.autoRemaining = this.autoRemaining === Infinity ? Infinity : this.autoRemaining - 1;
+      this.hud.setAutoRunning(this.autoRemaining);
+    }
 
     // Play the cinematic bonus intro before the free spins begin.
     if (justTriggered) {
@@ -601,14 +664,17 @@ export class SlotScene extends Phaser.Scene {
     }
 
     if (this.auto) {
-      if (this.state.credits >= this.state.bet) {
+      const stop =
+        (this.autoStopOnWin && this.state.lastWin > 0) ||
+        this.autoRemaining <= 0 ||
+        this.state.credits < this.state.bet;
+      if (!stop) {
         this.time.delayedCall(650, () => {
-          if (this.auto && !this.state.spinning) this.doSpin(false);
+          if (this.auto && !this.state.spinning && !this.state.bonus.active) this.doSpin(false);
         });
         return;
       }
-      this.auto = false;
-      this.hud.setAutoActive(false);
+      this.stopAuto();
     }
 
     this.hud.setSpinEnabled(true);
@@ -616,13 +682,30 @@ export class SlotScene extends Phaser.Scene {
 
   private endBonus(): void {
     const wasSuper = this.state.bonus.isSuperBonus;
+    setMusicMode('base');
     this.state.bonus = makeInactiveBonus();
     this.state.message = wasSuper
       ? 'Chrono Showdown complete — winnings secured!'
       : 'Bonus complete — back to base game.';
     this.hud.setMultiplier(1);
     this.hud.update(this.state);
-    this.hud.setSpinEnabled(true);
+
+    // Resume or stop autoplay after the bonus, per the player's settings.
+    if (this.auto) {
+      const stop =
+        this.autoStopOnBonus || this.autoRemaining <= 0 || this.state.credits < this.state.bet;
+      if (stop) {
+        this.stopAuto();
+        this.hud.setSpinEnabled(true);
+      } else {
+        this.hud.setAutoRunning(this.autoRemaining);
+        this.time.delayedCall(800, () => {
+          if (this.auto && !this.state.spinning) this.doSpin(false);
+        });
+      }
+    } else {
+      this.hud.setSpinEnabled(true);
+    }
   }
 
   // --- Highlight / FX ------------------------------------------------------
@@ -807,33 +890,72 @@ export class SlotScene extends Phaser.Scene {
 
   private showBigWin(win: number): void {
     const { width, height } = this.scale;
-    this.starShower(1600);
-    const text = this.add
-      .text(width / 2, height / 2 - 40, `BIG WIN!\n${win.toLocaleString()}`, {
+    const x = win / this.state.bet;
+
+    // Escalating tiers: BIG (>=20x) → MEGA (>=50x) → EPIC (>=100x).
+    const tier: 'big' | 'mega' | 'epic' = x >= 100 ? 'epic' : x >= 50 ? 'mega' : 'big';
+    const cfg = {
+      big: { label: 'BIG WIN', color: '#ffcc33', stroke: '#5a0e3a', size: 60, shower: 1600 },
+      mega: { label: 'MEGA WIN', color: '#ff8a3a', stroke: '#3a0e2e', size: 74, shower: 2400 },
+      epic: { label: 'EPIC WIN', color: '#4affff', stroke: '#2a0e5a', size: 88, shower: 3400 },
+    }[tier];
+
+    bigWinSound(tier);
+    this.starShower(cfg.shower);
+    if (tier !== 'big') this.flashScreen();
+
+    const label = this.add
+      .text(width / 2, height / 2 - 56, cfg.label, {
         fontFamily: 'Arial Black, sans-serif',
-        fontSize: '64px',
-        color: '#ffcc33',
-        align: 'center',
-        stroke: '#5a0e3a',
-        strokeThickness: 10,
+        fontSize: `${cfg.size}px`,
+        color: cfg.color,
+        stroke: cfg.stroke,
+        strokeThickness: 12,
       })
       .setOrigin(0.5)
       .setDepth(90)
       .setScale(0.2);
 
+    // Count the amount up underneath the tier banner.
+    const amount = this.add
+      .text(width / 2, height / 2 + 14, '0', {
+        fontFamily: 'Arial Black, sans-serif',
+        fontSize: '48px',
+        color: '#ffffff',
+        stroke: cfg.stroke,
+        strokeThickness: 8,
+      })
+      .setOrigin(0.5)
+      .setDepth(90);
+
+    this.tweens.add({ targets: label, scale: 1, duration: 450, ease: 'Back.easeOut' });
     this.tweens.add({
-      targets: text,
-      scale: 1,
-      duration: 450,
-      ease: 'Back.easeOut',
+      targets: label,
+      scale: 1.05,
+      duration: 600,
+      yoyo: true,
+      repeat: 1,
+      delay: 450,
+      ease: 'Sine.easeInOut',
+    });
+    const counter = { v: 0 };
+    this.tweens.add({
+      targets: counter,
+      v: win,
+      duration: Math.min(1400, 500 + x * 6),
+      ease: 'Cubic.easeOut',
+      onUpdate: () => amount.setText(Math.round(counter.v).toLocaleString()),
+      onComplete: () => amount.setText(win.toLocaleString()),
+    });
+
+    this.tweens.add({
+      targets: [label, amount],
+      alpha: 0,
+      delay: 1700 + cfg.shower * 0.2,
+      duration: 500,
       onComplete: () => {
-        this.tweens.add({
-          targets: text,
-          alpha: 0,
-          delay: 1100,
-          duration: 500,
-          onComplete: () => text.destroy(),
-        });
+        label.destroy();
+        amount.destroy();
       },
     });
   }

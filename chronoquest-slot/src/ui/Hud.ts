@@ -7,12 +7,21 @@ import Phaser from 'phaser';
 import type { SlotGameState } from '../game/types';
 import { FX_SPARK } from './fxTextures';
 
+export interface AutoOptions {
+  /** Number of auto spins; Infinity for unlimited. */
+  count: number;
+  stopOnWin: boolean;
+  stopOnBonus: boolean;
+}
+
 export interface HudCallbacks {
   onSpin: () => void;
-  onToggleAuto: () => void;
+  onStartAuto: (opts: AutoOptions) => void;
+  onStopAuto: () => void;
   onBetChange: (delta: number) => void;
   onToggleMute: () => void;
   onInfo: () => void;
+  onReset: () => void;
 }
 
 const PANEL = 0x0a0e24;
@@ -36,6 +45,11 @@ export class Hud {
   private autoButton!: Phaser.GameObjects.Container;
   private autoLabel!: Phaser.GameObjects.Text;
   private muteLabel!: Phaser.GameObjects.Text;
+  private autoRunning = false;
+  private autoPanel?: Phaser.GameObjects.Container;
+  private autoOpts: AutoOptions = { count: 25, stopOnWin: false, stopOnBonus: true };
+  private countButtons: { value: number; refresh: () => void }[] = [];
+  private toggleRefreshers: (() => void)[] = [];
   private spinGlow!: Phaser.GameObjects.Image;
   private spinGlowTween?: Phaser.Tweens.Tween;
   private winTween?: Phaser.Tweens.Tween;
@@ -109,6 +123,16 @@ export class Hud {
     this.makeMiniButton(300, panelY + 22, '-', () => this.cb.onBetChange(-1));
     this.makeMiniButton(420, panelY + 22, '+', () => this.cb.onBetChange(1));
 
+    // --- Reset balance (label under credits) ---
+    this.scene.add
+      .text(120, panelY + 32, '↺ reset', { fontFamily: 'Arial', fontSize: '13px', color: '#6a7ba8' })
+      .setOrigin(0.5)
+      .setDepth(51)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerover', function (this: Phaser.GameObjects.Text) { this.setColor('#4affff'); })
+      .on('pointerout', function (this: Phaser.GameObjects.Text) { this.setColor('#6a7ba8'); })
+      .on('pointerdown', () => this.cb.onReset());
+
     // --- Spin button (with a pulsing glow when ready) ---
     this.spinGlow = this.scene.add
       .image(W - 130, panelY, FX_SPARK)
@@ -122,11 +146,12 @@ export class Hud {
     );
     this.spinLabel = this.spinButton.getData('label');
 
-    // --- Auto button ---
+    // --- Auto button (opens the autoplay panel, or stops a running session) ---
     this.autoButton = this.makeButton(W - 300, panelY, 130, 76, 'AUTO', ACCENT, () =>
-      this.cb.onToggleAuto(),
+      this.onAutoClicked(),
     );
     this.autoLabel = this.autoButton.getData('label');
+    this.buildAutoPanel(W - 300, panelY);
 
     // --- Mute toggle (top-left) ---
     const muteButton = this.makeButton(74, 36, 116, 40, '♪ SOUND', ACCENT, () =>
@@ -285,8 +310,138 @@ export class Hud {
     this.spinLabel.setText(label);
   }
 
-  setAutoActive(active: boolean): void {
-    this.autoLabel.setText(active ? 'STOP' : 'AUTO');
+  /** Reflect autoplay state. `remaining` is null when not running, else the count left. */
+  setAutoRunning(remaining: number | null): void {
+    this.autoRunning = remaining !== null;
+    if (remaining === null) {
+      this.autoLabel.setText('AUTO');
+    } else {
+      this.autoLabel.setText(remaining === Infinity ? 'STOP ∞' : `STOP ${remaining}`);
+      this.closeAutoPanel();
+    }
+  }
+
+  // --- Autoplay config panel ----------------------------------------------
+
+  private onAutoClicked(): void {
+    if (this.autoRunning) {
+      this.cb.onStopAuto();
+      return;
+    }
+    if (this.autoPanel?.visible) this.closeAutoPanel();
+    else this.openAutoPanel();
+  }
+
+  private openAutoPanel(): void {
+    this.autoPanel?.setVisible(true);
+  }
+  private closeAutoPanel(): void {
+    this.autoPanel?.setVisible(false);
+  }
+
+  private buildAutoPanel(anchorX: number, anchorY: number): void {
+    const w = 280;
+    const h = 250;
+    const cx = anchorX;
+    const cy = anchorY - h / 2 - 70;
+    const panel = this.scene.add.container(cx, cy).setDepth(70).setVisible(false);
+
+    const bg = this.scene.add.graphics();
+    bg.fillStyle(0x0a0e24, 0.98);
+    bg.fillRoundedRect(-w / 2, -h / 2, w, h, 16);
+    bg.lineStyle(2, ACCENT, 0.9);
+    bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 16);
+    panel.add(bg);
+
+    panel.add(
+      this.scene.add
+        .text(0, -h / 2 + 22, 'AUTOPLAY', { fontFamily: 'Arial Black', fontSize: '18px', color: '#4affff' })
+        .setOrigin(0.5),
+    );
+    panel.add(
+      this.scene.add
+        .text(0, -h / 2 + 44, 'number of spins', { fontFamily: 'Arial', fontSize: '12px', color: '#6a7ba8' })
+        .setOrigin(0.5),
+    );
+
+    // Count choices.
+    const counts: [string, number][] = [
+      ['10', 10],
+      ['25', 25],
+      ['50', 50],
+      ['∞', Infinity],
+    ];
+    this.countButtons = [];
+    counts.forEach(([label, value], i) => {
+      const bx = -w / 2 + 42 + i * 66;
+      const by = -h / 2 + 78;
+      const g = this.scene.add.graphics();
+      const txt = this.scene.add
+        .text(bx, by, label, { fontFamily: 'Arial Black', fontSize: '18px', color: '#ffffff' })
+        .setOrigin(0.5);
+      const refresh = () => {
+        const on = this.autoOpts.count === value;
+        g.clear();
+        g.fillStyle(on ? GOLD : 0x1a2148, on ? 0.3 : 1);
+        g.fillRoundedRect(bx - 28, by - 20, 56, 40, 10);
+        g.lineStyle(2, on ? GOLD : ACCENT, on ? 1 : 0.6);
+        g.strokeRoundedRect(bx - 28, by - 20, 56, 40, 10);
+        txt.setColor(on ? '#ffcc33' : '#ffffff');
+      };
+      refresh();
+      const zone = this.scene.add.zone(bx, by, 56, 40).setInteractive({ useHandCursor: true });
+      zone.on('pointerdown', () => {
+        this.autoOpts.count = value;
+        this.countButtons.forEach((b) => b.refresh());
+      });
+      panel.add([g, txt, zone]);
+      this.countButtons.push({ value, refresh });
+    });
+
+    // Toggles.
+    this.toggleRefreshers = [];
+    this.addToggle(panel, w, -h / 2 + 128, 'Stop on win', () => this.autoOpts.stopOnWin, (v) => (this.autoOpts.stopOnWin = v));
+    this.addToggle(panel, w, -h / 2 + 168, 'Stop on bonus', () => this.autoOpts.stopOnBonus, (v) => (this.autoOpts.stopOnBonus = v));
+
+    // Start button.
+    const start = this.makeButton(0, h / 2 - 34, 180, 46, 'START', GOLD, () => {
+      this.closeAutoPanel();
+      this.cb.onStartAuto({ ...this.autoOpts });
+    });
+    panel.add(start);
+
+    this.autoPanel = panel;
+  }
+
+  private addToggle(
+    panel: Phaser.GameObjects.Container,
+    w: number,
+    y: number,
+    label: string,
+    get: () => boolean,
+    set: (v: boolean) => void,
+  ): void {
+    const bx = -w / 2 + 34;
+    const box = this.scene.add.graphics();
+    const refresh = () => {
+      const on = get();
+      box.clear();
+      box.fillStyle(on ? GOLD : 0x1a2148, on ? 0.9 : 1);
+      box.fillRoundedRect(bx - 12, y - 12, 24, 24, 6);
+      box.lineStyle(2, on ? GOLD : ACCENT, 0.8);
+      box.strokeRoundedRect(bx - 12, y - 12, 24, 24, 6);
+    };
+    refresh();
+    const txt = this.scene.add
+      .text(bx + 24, y, label, { fontFamily: 'Arial', fontSize: '15px', color: '#c8d4ff' })
+      .setOrigin(0, 0.5);
+    const zone = this.scene.add.zone(0, y, w - 40, 30).setInteractive({ useHandCursor: true });
+    zone.on('pointerdown', () => {
+      set(!get());
+      refresh();
+    });
+    panel.add([box, txt, zone]);
+    this.toggleRefreshers.push(refresh);
   }
 
   setMuted(muted: boolean): void {
