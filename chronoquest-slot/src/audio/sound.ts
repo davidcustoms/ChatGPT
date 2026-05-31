@@ -117,3 +117,21 @@ export function bonusSound(): void {
   });
   noiseBurst(0, 0.5, 600, 4000, 0.2);
 }
+
+/** Escalating win fanfare keyed to the win tier (big < mega < epic). */
+export function bigWinSound(tier: 'big' | 'mega' | 'epic'): void {
+  initAudio();
+  const scale = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1318.5];
+  const reps = tier === 'epic' ? 3 : tier === 'mega' ? 2 : 1;
+  const step = 0.09;
+  let i = 0;
+  for (let r = 0; r < reps; r++) {
+    for (const base of scale) {
+      const f = base * (1 + r * 0.5); // climb an octave-ish each repeat
+      note(f, i * step, 0.32, 'triangle', 0.42);
+      note(f * 1.5, i * step, 0.32, 'sine', 0.16);
+      i++;
+    }
+  }
+  noiseBurst(0, 0.4 + reps * 0.15, 700, 5000, 0.18);
+}

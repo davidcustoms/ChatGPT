@@ -19,7 +19,7 @@ import { Background } from '../ui/Background';
 import { texKey } from '../ui/symbolTextures';
 import { FX_SPARK, FX_STAR } from '../ui/fxTextures';
 import type { BonusIntroData } from './BonusIntroScene';
-import { bonusSound, initAudio, setMuted, spinSound, stopSound, winSound } from '../audio/sound';
+import { bigWinSound, bonusSound, initAudio, setMuted, spinSound, stopSound, winSound } from '../audio/sound';
 
 // --- Layout constants ---
 const CELL_W = 118;
@@ -807,33 +807,72 @@ export class SlotScene extends Phaser.Scene {
 
   private showBigWin(win: number): void {
     const { width, height } = this.scale;
-    this.starShower(1600);
-    const text = this.add
-      .text(width / 2, height / 2 - 40, `BIG WIN!\n${win.toLocaleString()}`, {
+    const x = win / this.state.bet;
+
+    // Escalating tiers: BIG (>=20x) → MEGA (>=50x) → EPIC (>=100x).
+    const tier: 'big' | 'mega' | 'epic' = x >= 100 ? 'epic' : x >= 50 ? 'mega' : 'big';
+    const cfg = {
+      big: { label: 'BIG WIN', color: '#ffcc33', stroke: '#5a0e3a', size: 60, shower: 1600 },
+      mega: { label: 'MEGA WIN', color: '#ff8a3a', stroke: '#3a0e2e', size: 74, shower: 2400 },
+      epic: { label: 'EPIC WIN', color: '#4affff', stroke: '#2a0e5a', size: 88, shower: 3400 },
+    }[tier];
+
+    bigWinSound(tier);
+    this.starShower(cfg.shower);
+    if (tier !== 'big') this.flashScreen();
+
+    const label = this.add
+      .text(width / 2, height / 2 - 56, cfg.label, {
         fontFamily: 'Arial Black, sans-serif',
-        fontSize: '64px',
-        color: '#ffcc33',
-        align: 'center',
-        stroke: '#5a0e3a',
-        strokeThickness: 10,
+        fontSize: `${cfg.size}px`,
+        color: cfg.color,
+        stroke: cfg.stroke,
+        strokeThickness: 12,
       })
       .setOrigin(0.5)
       .setDepth(90)
       .setScale(0.2);
 
+    // Count the amount up underneath the tier banner.
+    const amount = this.add
+      .text(width / 2, height / 2 + 14, '0', {
+        fontFamily: 'Arial Black, sans-serif',
+        fontSize: '48px',
+        color: '#ffffff',
+        stroke: cfg.stroke,
+        strokeThickness: 8,
+      })
+      .setOrigin(0.5)
+      .setDepth(90);
+
+    this.tweens.add({ targets: label, scale: 1, duration: 450, ease: 'Back.easeOut' });
     this.tweens.add({
-      targets: text,
-      scale: 1,
-      duration: 450,
-      ease: 'Back.easeOut',
+      targets: label,
+      scale: 1.05,
+      duration: 600,
+      yoyo: true,
+      repeat: 1,
+      delay: 450,
+      ease: 'Sine.easeInOut',
+    });
+    const counter = { v: 0 };
+    this.tweens.add({
+      targets: counter,
+      v: win,
+      duration: Math.min(1400, 500 + x * 6),
+      ease: 'Cubic.easeOut',
+      onUpdate: () => amount.setText(Math.round(counter.v).toLocaleString()),
+      onComplete: () => amount.setText(win.toLocaleString()),
+    });
+
+    this.tweens.add({
+      targets: [label, amount],
+      alpha: 0,
+      delay: 1700 + cfg.shower * 0.2,
+      duration: 500,
       onComplete: () => {
-        this.tweens.add({
-          targets: text,
-          alpha: 0,
-          delay: 1100,
-          duration: 500,
-          onComplete: () => text.destroy(),
-        });
+        label.destroy();
+        amount.destroy();
       },
     });
   }
