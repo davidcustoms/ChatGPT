@@ -176,25 +176,39 @@ export class SlotScene extends Phaser.Scene {
     });
   }
 
-  private drawCardFace(card: Card, symbol: SymbolId): void {
+  /** Apply a symbol's texture + label styling to an image/label pair. */
+  private styleCard(
+    image: Phaser.GameObjects.Image,
+    label: Phaser.GameObjects.Text,
+    symbol: SymbolId,
+  ): void {
     const def = SYMBOLS[symbol];
-    card.image.setTexture(texKey(symbol)).setDisplaySize(CELL_W - 4, CELL_H - 4);
-
+    image.setTexture(texKey(symbol)).setDisplaySize(CELL_W - 4, CELL_H - 4);
     // Low symbols show a big centered letter; everything else shows its emblem
     // (baked into the texture) with a small caption underneath.
     if (def.category === 'low') {
-      card.label
-        .setText(def.label)
-        .setColor(rgbToCss(def.glow))
-        .setFontSize(34)
-        .setPosition(0, 0);
+      label.setText(def.label).setColor(rgbToCss(def.glow)).setFontSize(34).setPosition(0, 0);
     } else {
-      card.label
+      label
         .setText(def.label)
         .setColor(rgbToCss(def.glow))
         .setFontSize(12)
         .setPosition(0, CELL_H / 2 - 14);
     }
+  }
+
+  /** Build a standalone symbol node (image + label) for use in scrolling strips. */
+  private makeSymbolCard(symbol: SymbolId): Phaser.GameObjects.Container {
+    const image = this.add.image(0, 0, texKey(symbol));
+    const label = this.add
+      .text(0, 0, '', { fontFamily: 'Arial Black, sans-serif', fontSize: '20px', color: '#ffffff' })
+      .setOrigin(0.5);
+    this.styleCard(image, label, symbol);
+    return this.add.container(0, 0, [image, label]);
+  }
+
+  private drawCardFace(card: Card, symbol: SymbolId): void {
+    this.styleCard(card.image, card.label, symbol);
     card.symbol = symbol;
   }
 
@@ -276,17 +290,17 @@ export class SlotScene extends Phaser.Scene {
     this.reelsDone = 0;
     const reels = REEL_LAYOUT.rows.length;
 
-    for (let r = 0; r < reels; r++) {
-      const spinDuration = 350 + r * 220;
-      const ticker = this.time.addEvent({
-        delay: 55,
-        loop: true,
-        callback: () => this.setReelRandom(r),
-      });
+    // Hide the resting cards while the scrolling strips play over the window.
+    for (const column of this.cards) {
+      for (const card of column) card.container.setVisible(false);
+    }
 
-      this.time.delayedCall(spinDuration, () => {
-        ticker.remove();
+    for (let r = 0; r < reels; r++) {
+      // Reels stop left-to-right via increasing scroll duration.
+      const duration = 620 + r * 260;
+      this.spinReelStrip(r, finalGrid[r], duration, () => {
         this.setReelFinal(r, finalGrid);
+        this.cards[r].forEach((card) => card.container.setVisible(true));
         stopSound();
         this.bounceReel(r);
         this.reelsDone++;
@@ -297,11 +311,55 @@ export class SlotScene extends Phaser.Scene {
     }
   }
 
-  private setReelRandom(reel: number): void {
+  /**
+   * Animate one reel as a masked vertical strip: the final symbols sit at the
+   * top of a strip padded below with random symbols; the strip starts shifted up
+   * (window full of randoms) and eases down so the finals settle into place.
+   */
+  private spinReelStrip(
+    reel: number,
+    finalSymbols: SymbolId[],
+    duration: number,
+    onDone: () => void,
+  ): void {
+    const n = REEL_LAYOUT.rows[reel];
+    const pitch = CELL_H + CELL_GAP;
+    const x = this.reelX[reel];
+    const pad = n + 8; // random symbols below the finals (covers the scroll)
     const pool = REEL_SYMBOL_POOLS[reel];
-    this.cards[reel].forEach((card) => {
+
+    const strip = this.add.container(0, 0).setDepth(11);
+
+    // Mask the strip to the reel's visible window.
+    const top = this.rowY(reel, 0) - CELL_H / 2;
+    const bottom = this.rowY(reel, n - 1) + CELL_H / 2;
+    const maskG = this.make.graphics({ x: 0, y: 0 }, false);
+    maskG.fillStyle(0xffffff);
+    maskG.fillRect(x - CELL_W / 2, top, CELL_W, bottom - top);
+    strip.setMask(maskG.createGeometryMask());
+
+    // Finals at the top of the strip, random padding below.
+    finalSymbols.forEach((sym, j) => {
+      const card = this.makeSymbolCard(sym).setPosition(x, this.rowY(reel, j));
+      strip.add(card);
+    });
+    for (let k = 1; k <= pad; k++) {
       const sym = pool[Math.floor(Math.random() * pool.length)];
-      this.drawCardFace(card, sym);
+      const card = this.makeSymbolCard(sym).setPosition(x, this.rowY(reel, n - 1) + k * pitch);
+      strip.add(card);
+    }
+
+    strip.y = -(pad * pitch); // start with the window full of randoms
+    this.tweens.add({
+      targets: strip,
+      y: 0,
+      duration,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        strip.destroy();
+        maskG.destroy();
+        onDone();
+      },
     });
   }
 

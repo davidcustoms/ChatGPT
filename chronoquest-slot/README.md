@@ -24,6 +24,7 @@ Other scripts:
 npm run build    # type-check (tsc --noEmit) + production build to dist/
 npm run preview  # preview the production build locally
 npm run test     # run the Vitest engine test-suite
+npm run sim      # RTP / volatility simulation (see "Measuring RTP" below)
 ```
 
 ---
@@ -35,6 +36,7 @@ npm run test     # run the Vitest engine test-suite
 | Entry / Phaser config | `src/main.ts` |
 | Splash scene | `src/scenes/BootScene.ts` |
 | Main game scene (render, animation, flow) | `src/scenes/SlotScene.ts` |
+| Paytable / info overlay scene | `src/scenes/InfoScene.ts` |
 | HUD (credits, bet, win, buttons) | `src/ui/Hud.ts` |
 | **Pure math engine** | `src/game/slotEngine.ts` |
 | Types / interfaces | `src/game/types.ts` |
@@ -45,7 +47,8 @@ npm run test     # run the Vitest engine test-suite
 | Paytable + bonus config | `src/game/paytable.ts` |
 | RNG wrapper (swappable) | `src/game/rng.ts` |
 | Procedural audio (Web Audio API) | `src/audio/sound.ts` |
-| Engine tests | `tests/engine.test.ts` |
+| RTP / volatility simulation | `src/sim/simulate.ts`, `src/sim/runSim.ts` |
+| Engine + simulation tests | `tests/engine.test.ts`, `tests/simulate.test.ts` |
 
 The engine in `src/game/` has **no Phaser imports**, so all math is unit-testable
 and renderer-agnostic.
@@ -97,6 +100,20 @@ Edit `src/game/paytable.ts`:
 uses `DefaultRng` (Math.random); tests use the deterministic `SeededRng`. Replace
 `DefaultRng` with a certified RNG later without touching the engine.
 
+### Measuring RTP
+`npm run sim` replays the full game flow (base spins + free-spin rounds) through
+the real engine and reports **RTP**, hit frequency, bonus-trigger rate, big-win
+count and max win. Use it to retune weights/paytable with real numbers.
+
+```bash
+npm run sim                       # 1,000,000 spins @ bet 100
+npm run sim -- --spins 5000000    # more spins for tighter numbers
+npm run sim -- --seed 42          # reproducible run (SeededRng)
+```
+
+The shipped config measures ~94–95% RTP (high-volatility profile, bonus ~1 in
+330). Change a paytable value and re-run to see the impact immediately.
+
 ---
 
 ## Art & audio
@@ -124,11 +141,9 @@ them in `BootScene` and play them inside these same four hook functions.
 ## Ideas for what to improve next
 
 - A layered music track / ambience on top of the procedural SFX.
-- Reel-strip based spinning (true scrolling strips) instead of symbol cycling.
-- Win-line / ways highlighting overlays and a paytable info screen.
 - Configurable autoplay (spin count, stop-on-win/bonus).
-- An RTP simulation harness using the seeded RNG to validate volatility.
 - Persisted balance + settings via `localStorage`.
+- Real sprite/audio assets dropped in over the procedural placeholders.
 
 ---
 
