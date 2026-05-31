@@ -10,6 +10,7 @@ export interface HudCallbacks {
   onSpin: () => void;
   onToggleAuto: () => void;
   onBetChange: (delta: number) => void;
+  onToggleMute: () => void;
 }
 
 const PANEL = 0x0a0e24;
@@ -32,6 +33,7 @@ export class Hud {
   private spinLabel!: Phaser.GameObjects.Text;
   private autoButton!: Phaser.GameObjects.Container;
   private autoLabel!: Phaser.GameObjects.Text;
+  private muteLabel!: Phaser.GameObjects.Text;
 
   constructor(scene: Phaser.Scene, cb: HudCallbacks) {
     this.scene = scene;
@@ -113,6 +115,13 @@ export class Hud {
       this.cb.onToggleAuto(),
     );
     this.autoLabel = this.autoButton.getData('label');
+
+    // --- Mute toggle (top-left) ---
+    const muteButton = this.makeButton(74, 36, 116, 40, '♪ SOUND', ACCENT, () =>
+      this.cb.onToggleMute(),
+    );
+    this.muteLabel = muteButton.getData('label');
+    this.muteLabel.setFontSize(15);
   }
 
   private makeStat(x: number, y: number, label: string, color: string): Phaser.GameObjects.Text {
@@ -223,6 +232,10 @@ export class Hud {
 
   setAutoActive(active: boolean): void {
     this.autoLabel.setText(active ? 'STOP' : 'AUTO');
+  }
+
+  setMuted(muted: boolean): void {
+    this.muteLabel.setText(muted ? '✕ MUTED' : '♪ SOUND');
   }
 }
 
