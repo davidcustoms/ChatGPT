@@ -37,6 +37,8 @@ npm run sim      # RTP / volatility simulation (see "Measuring RTP" below)
 | Splash scene | `src/scenes/BootScene.ts` |
 | Main game scene (render, animation, flow) | `src/scenes/SlotScene.ts` |
 | Paytable / info overlay scene | `src/scenes/InfoScene.ts` |
+| Cinematic bonus intro overlay scene | `src/scenes/BonusIntroScene.ts` |
+| Animated cinematic background | `src/ui/Background.ts` |
 | HUD (credits, bet, win, buttons) | `src/ui/Hud.ts` |
 | **Pure math engine** | `src/game/slotEngine.ts` |
 | Types / interfaces | `src/game/types.ts` |

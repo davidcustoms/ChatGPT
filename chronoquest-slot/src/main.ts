@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
 import { SlotScene } from './scenes/SlotScene';
 import { InfoScene } from './scenes/InfoScene';
+import { BonusIntroScene } from './scenes/BonusIntroScene';
 
 // ChronoQuest: Team Showdown — free-play demo entry point.
 const config: Phaser.Types.Core.GameConfig = {
@@ -18,7 +19,7 @@ const config: Phaser.Types.Core.GameConfig = {
     antialias: true,
     roundPixels: true,
   },
-  scene: [BootScene, SlotScene, InfoScene],
+  scene: [BootScene, SlotScene, InfoScene, BonusIntroScene],
 };
 
 // eslint-disable-next-line no-new

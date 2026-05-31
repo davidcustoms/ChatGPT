@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import { generateSymbolTextures } from '../ui/symbolTextures';
 import { generateFxTextures } from '../ui/fxTextures';
+import { Background } from '../ui/Background';
+import { FX_SPARK } from '../ui/fxTextures';
 
 /**
  * BootScene — lightweight intro. Art is generated procedurally, so this scene
@@ -21,6 +23,17 @@ export class BootScene extends Phaser.Scene {
 
     this.cameras.main.setBackgroundColor('#05060f');
 
+    // Cinematic backdrop (same system as the game) + a glow behind the logo.
+    new Background(this, { horizon: false });
+    const logoGlow = this.add
+      .image(width / 2, height / 2 - 10, FX_SPARK)
+      .setTint(0x18a8ff)
+      .setAlpha(0)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(2);
+    logoGlow.setDisplaySize(640, 320);
+    this.tweens.add({ targets: logoGlow, alpha: 0.4, duration: 700, ease: 'Sine.easeOut' });
+
     const title = this.add
       .text(width / 2, height / 2 - 30, 'ChronoQuest', {
         fontFamily: 'Arial Black, sans-serif',
@@ -30,6 +43,7 @@ export class BootScene extends Phaser.Scene {
         strokeThickness: 8,
       })
       .setOrigin(0.5)
+      .setDepth(5)
       .setAlpha(0);
 
     const subtitle = this.add
@@ -40,6 +54,7 @@ export class BootScene extends Phaser.Scene {
         letterSpacing: 6,
       })
       .setOrigin(0.5)
+      .setDepth(5)
       .setAlpha(0);
 
     const hint = this.add
@@ -49,6 +64,7 @@ export class BootScene extends Phaser.Scene {
         color: '#6a7ba8',
       })
       .setOrigin(0.5)
+      .setDepth(5)
       .setAlpha(0);
 
     this.tweens.add({ targets: [title, subtitle, hint], alpha: 1, duration: 600, ease: 'Sine.easeOut' });
