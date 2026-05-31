@@ -20,6 +20,7 @@ import { texKey } from '../ui/symbolTextures';
 import { FX_SPARK, FX_STAR } from '../ui/fxTextures';
 import type { BonusIntroData } from './BonusIntroScene';
 import { bigWinSound, bonusSound, initAudio, setMuted, spinSound, stopSound, winSound } from '../audio/sound';
+import { loadSave, writeSave } from '../game/persistence';
 
 // --- Layout constants ---
 const CELL_W = 118;
@@ -36,6 +37,7 @@ const REEL_SYMBOL_POOLS: SymbolId[][] = REEL_LAYOUT.rows.map((_, reel) => {
 });
 
 const BET_STEPS = [50, 100, 200, 300, 500];
+const STARTING_CREDITS = 10000;
 
 interface Card {
   container: Phaser.GameObjects.Container;
@@ -69,14 +71,24 @@ export class SlotScene extends Phaser.Scene {
   create(): void {
     this.cameras.main.fadeIn(300);
 
+    // Restore a saved session (fake credits, bet level, mute) if present.
+    const saved = loadSave();
+    if (saved) {
+      this.betIndex = Phaser.Math.Clamp(saved.betIndex, 0, BET_STEPS.length - 1);
+      this.muted = saved.muted;
+    }
+
     this.state = {
-      credits: 10000,
+      credits: saved ? saved.credits : STARTING_CREDITS,
       bet: BET_STEPS[this.betIndex],
       lastWin: 0,
       spinning: false,
       message: 'Spin to begin your ChronoQuest!',
       bonus: makeInactiveBonus(),
     };
+
+    // Apply restored mute preference (also primes audio's initial gain).
+    setMuted(this.muted);
 
     this.drawBackground();
     this.computeReelGeometry();
@@ -99,8 +111,24 @@ export class SlotScene extends Phaser.Scene {
       onBetChange: (d) => this.changeBet(d),
       onToggleMute: () => this.toggleMute(),
       onInfo: () => this.openInfo(),
+      onReset: () => this.resetBalance(),
     });
     this.hud.update(this.state);
+    this.hud.setMuted(this.muted);
+  }
+
+  private persist(): void {
+    writeSave({ credits: this.state.credits, betIndex: this.betIndex, muted: this.muted });
+  }
+
+  private resetBalance(): void {
+    if (this.state.spinning || this.state.bonus.active) return;
+    this.state.credits = STARTING_CREDITS;
+    this.state.lastWin = 0;
+    this.state.message = 'Balance reset to 10,000 fake credits.';
+    this.persist();
+    this.hud.update(this.state);
+    this.hud.setWin(0);
   }
 
   // --- Rendering -----------------------------------------------------------
@@ -318,6 +346,7 @@ export class SlotScene extends Phaser.Scene {
     this.muted = !this.muted;
     setMuted(this.muted);
     this.hud.setMuted(this.muted);
+    this.persist();
   }
 
   private openInfo(): void {
@@ -331,6 +360,7 @@ export class SlotScene extends Phaser.Scene {
     this.betIndex = Phaser.Math.Clamp(this.betIndex + delta, 0, BET_STEPS.length - 1);
     this.state.bet = BET_STEPS[this.betIndex];
     this.hud.update(this.state);
+    this.persist();
   }
 
   // --- Spin lifecycle ------------------------------------------------------
@@ -574,6 +604,7 @@ export class SlotScene extends Phaser.Scene {
     this.hud.update(this.state);
     if (win > 0) this.hud.animateWin(win);
     else this.hud.setWin(0);
+    this.persist();
 
     // Play the cinematic bonus intro before the free spins begin.
     if (justTriggered) {

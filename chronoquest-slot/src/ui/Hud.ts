@@ -13,6 +13,7 @@ export interface HudCallbacks {
   onBetChange: (delta: number) => void;
   onToggleMute: () => void;
   onInfo: () => void;
+  onReset: () => void;
 }
 
 const PANEL = 0x0a0e24;
@@ -108,6 +109,16 @@ export class Hud {
     // --- Bet +/- buttons ---
     this.makeMiniButton(300, panelY + 22, '-', () => this.cb.onBetChange(-1));
     this.makeMiniButton(420, panelY + 22, '+', () => this.cb.onBetChange(1));
+
+    // --- Reset balance (label under credits) ---
+    this.scene.add
+      .text(120, panelY + 32, '↺ reset', { fontFamily: 'Arial', fontSize: '13px', color: '#6a7ba8' })
+      .setOrigin(0.5)
+      .setDepth(51)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerover', function (this: Phaser.GameObjects.Text) { this.setColor('#4affff'); })
+      .on('pointerout', function (this: Phaser.GameObjects.Text) { this.setColor('#6a7ba8'); })
+      .on('pointerdown', () => this.cb.onReset());
 
     // --- Spin button (with a pulsing glow when ready) ---
     this.spinGlow = this.scene.add
