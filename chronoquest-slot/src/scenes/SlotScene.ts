@@ -19,7 +19,17 @@ import { Background } from '../ui/Background';
 import { texKey } from '../ui/symbolTextures';
 import { FX_SPARK, FX_STAR } from '../ui/fxTextures';
 import type { BonusIntroData } from './BonusIntroScene';
-import { bigWinSound, bonusSound, initAudio, setMuted, spinSound, stopSound, winSound } from '../audio/sound';
+import {
+  bigWinSound,
+  bonusSound,
+  initAudio,
+  setMuted,
+  setMusicMode,
+  spinSound,
+  startMusic,
+  stopSound,
+  winSound,
+} from '../audio/sound';
 import { loadSave, writeSave } from '../game/persistence';
 
 // --- Layout constants ---
@@ -329,12 +339,14 @@ export class SlotScene extends Phaser.Scene {
 
   private onSpinClicked(): void {
     initAudio(); // unlock audio on the first user gesture
+    startMusic();
     if (this.state.spinning || this.state.bonus.active) return;
     this.doSpin(false);
   }
 
   private toggleAuto(): void {
     initAudio();
+    startMusic();
     if (this.state.bonus.active) return;
     this.auto = !this.auto;
     this.hud.setAutoActive(this.auto);
@@ -585,6 +597,7 @@ export class SlotScene extends Phaser.Scene {
         // Any wild on the triggering grid becomes sticky immediately.
         this.state.bonus.stickyWilds = applyStickyWilds(grid, []);
         bonusSound();
+        setMusicMode('bonus');
         this.flashScreen();
         messages.push(
           trig.isSuper
@@ -647,6 +660,7 @@ export class SlotScene extends Phaser.Scene {
 
   private endBonus(): void {
     const wasSuper = this.state.bonus.isSuperBonus;
+    setMusicMode('base');
     this.state.bonus = makeInactiveBonus();
     this.state.message = wasSuper
       ? 'Chrono Showdown complete — winnings secured!'
