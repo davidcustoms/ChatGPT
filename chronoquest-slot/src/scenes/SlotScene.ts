@@ -16,6 +16,7 @@ import {
 } from '../game/slotEngine';
 import { Hud } from '../ui/Hud';
 import { texKey } from '../ui/symbolTextures';
+import { FX_SPARK, FX_STAR } from '../ui/fxTextures';
 import { bonusSound, initAudio, setMuted, spinSound, stopSound, winSound } from '../audio/sound';
 
 // --- Layout constants ---
@@ -53,6 +54,10 @@ export class SlotScene extends Phaser.Scene {
   private muted = false;
   private reelsDone = 0;
   private flashRect?: Phaser.GameObjects.Rectangle;
+  private winBox!: Phaser.GameObjects.Graphics;
+  private winBoxTween?: Phaser.Tweens.Tween;
+  private sparkEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private starEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
 
   constructor() {
     super('SlotScene');
@@ -82,6 +87,8 @@ export class SlotScene extends Phaser.Scene {
       .rectangle(this.scale.width / 2, this.scale.height / 2, this.scale.width, this.scale.height, 0x4affff)
       .setAlpha(0)
       .setDepth(80);
+
+    this.createEffects();
 
     this.hud = new Hud(this, {
       onSpin: () => this.onSpinClicked(),
@@ -338,8 +345,9 @@ export class SlotScene extends Phaser.Scene {
     this.state.credits += win;
     this.state.lastWin = win;
 
-    // Highlight winning positions + glow specials.
+    // Highlight winning positions (boxes + sparks + pulse) + glow specials.
     const winPositions = evaluation.wins.flatMap((w) => w.positions);
+    this.highlightWinBoxes(winPositions);
     this.pulsePositions(winPositions);
     this.glowPositions(this.findSymbol(grid, SCATTER_ID));
     this.glowPositions(this.findSymbol(grid, WILD_ID));
@@ -363,6 +371,8 @@ export class SlotScene extends Phaser.Scene {
         this.state.bonus.stickyWilds = applyStickyWilds(grid, []);
         bonusSound();
         this.flashScreen();
+        this.burstAt(this.scale.width / 2, CENTER_Y, 60);
+        this.starShower(trig.isSuper ? 2600 : 1600);
         messages.push(
           trig.isSuper
             ? `★ CHRONO SHOWDOWN! ${trig.freeSpinsAwarded} free spins · starting x${SUPER_BONUS.startMultiplier} ★`
@@ -478,6 +488,85 @@ export class SlotScene extends Phaser.Scene {
         card.container.setScale(1).setAlpha(1);
       }
     }
+    this.winBoxTween?.remove();
+    this.winBoxTween = undefined;
+    this.winBox.clear().setAlpha(1);
+  }
+
+  private createEffects(): void {
+    // Win-highlight box layer (drawn around paying cells).
+    this.winBox = this.add.graphics().setDepth(60);
+
+    // Sparkle burst emitter for wins (tinted in neon/gold tones).
+    this.sparkEmitter = this.add
+      .particles(0, 0, FX_SPARK, {
+        speed: { min: 40, max: 150 },
+        scale: { start: 0.7, end: 0 },
+        lifespan: 600,
+        tint: [0x4affff, 0xffcc33, 0xff2fb0],
+        blendMode: 'ADD',
+        emitting: false,
+      })
+      .setDepth(70);
+
+    // Gold star shower for big wins / bonus, falling from the top.
+    this.starEmitter = this.add
+      .particles(0, 0, FX_STAR, {
+        x: { min: 0, max: this.scale.width },
+        y: -20,
+        speedY: { min: 120, max: 280 },
+        speedX: { min: -50, max: 50 },
+        scale: { start: 0.9, end: 0.2 },
+        rotate: { start: 0, end: 360 },
+        gravityY: 140,
+        lifespan: 1900,
+        tint: [0xffcc33, 0xfff0a0, 0xff2fb0, 0x4affff],
+        blendMode: 'ADD',
+        frequency: 35,
+        quantity: 2,
+        emitting: false,
+      })
+      .setDepth(85);
+  }
+
+  /** Draw + pulse highlight boxes around every paying cell, and spark them. */
+  private highlightWinBoxes(positions: GridPosition[]): void {
+    this.winBox.clear();
+    const seen = new Set<string>();
+    for (const pos of positions) {
+      const key = `${pos.reel}:${pos.row}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const card = this.cardAt(pos);
+      if (!card) continue;
+      const color = SYMBOLS[card.symbol].glow;
+      const x = this.reelX[pos.reel];
+      const y = this.rowY(pos.reel, pos.row);
+      const w = CELL_W - 2;
+      const h = CELL_H - 2;
+      this.winBox.lineStyle(3, color, 0.95);
+      this.winBox.strokeRoundedRect(x - w / 2, y - h / 2, w, h, 12);
+      this.sparkEmitter.explode(7, x, y);
+    }
+    if (seen.size > 0) {
+      this.winBoxTween = this.tweens.add({
+        targets: this.winBox,
+        alpha: { from: 1, to: 0.25 },
+        duration: 450,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
+  }
+
+  private burstAt(x: number, y: number, count: number): void {
+    this.sparkEmitter.explode(count, x, y);
+  }
+
+  private starShower(durationMs: number): void {
+    this.starEmitter.start();
+    this.time.delayedCall(durationMs, () => this.starEmitter.stop());
   }
 
   private flashScreen(): void {
@@ -495,6 +584,7 @@ export class SlotScene extends Phaser.Scene {
 
   private showBigWin(win: number): void {
     const { width, height } = this.scale;
+    this.starShower(1600);
     const text = this.add
       .text(width / 2, height / 2 - 40, `BIG WIN!\n${win.toLocaleString()}`, {
         fontFamily: 'Arial Black, sans-serif',

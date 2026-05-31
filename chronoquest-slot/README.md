@@ -40,6 +40,7 @@ npm run test     # run the Vitest engine test-suite
 | Types / interfaces | `src/game/types.ts` |
 | Symbol catalogue + colors/labels | `src/game/symbols.ts` |
 | Procedural sprite-texture generator | `src/ui/symbolTextures.ts` |
+| Procedural particle textures (win/bonus FX) | `src/ui/fxTextures.ts` |
 | Reel layout + symbol weights | `src/game/reelConfig.ts` |
 | Paytable + bonus config | `src/game/paytable.ts` |
 | RNG wrapper (swappable) | `src/game/rng.ts` |
@@ -122,7 +123,7 @@ them in `BootScene` and play them inside these same four hook functions.
 
 ## Ideas for what to improve next
 
-- Particle effects and a layered music track on top of the procedural SFX.
+- A layered music track / ambience on top of the procedural SFX.
 - Reel-strip based spinning (true scrolling strips) instead of symbol cycling.
 - Win-line / ways highlighting overlays and a paytable info screen.
 - Configurable autoplay (spin count, stop-on-win/bonus).

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { generateSymbolTextures } from '../ui/symbolTextures';
+import { generateFxTextures } from '../ui/fxTextures';
 
 /**
  * BootScene — lightweight intro. Art is generated procedurally, so this scene
@@ -14,8 +15,9 @@ export class BootScene extends Phaser.Scene {
   create(): void {
     const { width, height } = this.scale;
 
-    // Bake all symbol sprites into the texture cache up front.
+    // Bake all symbol + particle sprites into the texture cache up front.
     generateSymbolTextures(this);
+    generateFxTextures(this);
 
     this.cameras.main.setBackgroundColor('#05060f');
 
