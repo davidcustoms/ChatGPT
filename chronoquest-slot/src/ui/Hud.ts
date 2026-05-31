@@ -5,12 +5,14 @@
 
 import Phaser from 'phaser';
 import type { SlotGameState } from '../game/types';
+import { FX_SPARK } from './fxTextures';
 
 export interface HudCallbacks {
   onSpin: () => void;
   onToggleAuto: () => void;
   onBetChange: (delta: number) => void;
   onToggleMute: () => void;
+  onInfo: () => void;
 }
 
 const PANEL = 0x0a0e24;
@@ -34,6 +36,9 @@ export class Hud {
   private autoButton!: Phaser.GameObjects.Container;
   private autoLabel!: Phaser.GameObjects.Text;
   private muteLabel!: Phaser.GameObjects.Text;
+  private spinGlow!: Phaser.GameObjects.Image;
+  private spinGlowTween?: Phaser.Tweens.Tween;
+  private winTween?: Phaser.Tweens.Tween;
 
   constructor(scene: Phaser.Scene, cb: HudCallbacks) {
     this.scene = scene;
@@ -104,7 +109,14 @@ export class Hud {
     this.makeMiniButton(300, panelY + 22, '-', () => this.cb.onBetChange(-1));
     this.makeMiniButton(420, panelY + 22, '+', () => this.cb.onBetChange(1));
 
-    // --- Spin button ---
+    // --- Spin button (with a pulsing glow when ready) ---
+    this.spinGlow = this.scene.add
+      .image(W - 130, panelY, FX_SPARK)
+      .setTint(GOLD)
+      .setAlpha(0.35)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(45);
+    this.spinGlow.setDisplaySize(196, 116);
     this.spinButton = this.makeButton(W - 130, panelY, 150, 76, 'SPIN', GOLD, () =>
       this.cb.onSpin(),
     );
@@ -122,6 +134,10 @@ export class Hud {
     );
     this.muteLabel = muteButton.getData('label');
     this.muteLabel.setFontSize(15);
+
+    // --- Info / paytable button (top-left, next to mute) ---
+    const infoButton = this.makeButton(202, 36, 92, 40, 'ⓘ INFO', GOLD, () => this.cb.onInfo());
+    (infoButton.getData('label') as Phaser.GameObjects.Text).setFontSize(15);
   }
 
   private makeStat(x: number, y: number, label: string, color: string): Phaser.GameObjects.Text {
@@ -197,7 +213,6 @@ export class Hud {
   update(state: SlotGameState): void {
     this.creditsText.setText(formatNumber(state.credits));
     this.betText.setText(formatNumber(state.bet));
-    this.winText.setText(formatNumber(Math.round(state.lastWin)));
     this.messageText.setText(state.message);
 
     if (state.bonus.active) {
@@ -221,9 +236,49 @@ export class Hud {
     this.spinButton.setAlpha(enabled ? 1 : 0.4);
     if (enabled) {
       this.spinButton.setInteractive({ useHandCursor: true });
+      this.spinGlow.setVisible(true);
+      this.spinGlowTween?.remove();
+      this.spinGlowTween = this.scene.tweens.add({
+        targets: this.spinGlow,
+        alpha: 0.7,
+        scale: this.spinGlow.scale * 1.08,
+        duration: 900,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
     } else {
       this.spinButton.disableInteractive();
+      this.spinGlowTween?.remove();
+      this.spinGlowTween = undefined;
+      this.spinGlow.setVisible(false);
     }
+  }
+
+  /** Set the win amount instantly (no animation). */
+  setWin(value: number): void {
+    this.winTween?.remove();
+    this.winTween = undefined;
+    this.winText.setScale(1).setText(formatNumber(Math.round(value)));
+  }
+
+  /** Count the win up from zero with a little pop. */
+  animateWin(value: number): void {
+    this.winTween?.remove();
+    const counter = { v: 0 };
+    this.winText.setScale(1);
+    this.scene.tweens.add({ targets: this.winText, scale: 1.3, duration: 160, yoyo: true, ease: 'Quad.easeOut' });
+    this.winTween = this.scene.tweens.add({
+      targets: counter,
+      v: value,
+      duration: Math.min(900, 350 + value / 2),
+      ease: 'Cubic.easeOut',
+      onUpdate: () => this.winText.setText(formatNumber(Math.round(counter.v))),
+      onComplete: () => {
+        this.winText.setText(formatNumber(Math.round(value)));
+        this.winTween = undefined;
+      },
+    });
   }
 
   setSpinLabel(label: string): void {
