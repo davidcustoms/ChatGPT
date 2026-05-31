@@ -37,6 +37,21 @@ export interface SimStats {
   /** Largest single round win, in credits and in bet multiples. */
   maxWin: number;
   maxWinX: number;
+  /** Average win per spin (credits) — equals rtp * bet. */
+  averageWin: number;
+  /** Average win across winning rounds only (credits). */
+  averageWinPerHit: number;
+  /** Std-dev of per-round return in bet units — a volatility indicator. */
+  stdDev: number;
+  /** Rough volatility classification derived from stdDev. */
+  volatility: 'low' | 'medium' | 'high' | 'very high';
+}
+
+function classifyVolatility(stdDev: number): SimStats['volatility'] {
+  if (stdDev < 3) return 'low';
+  if (stdDev < 6) return 'medium';
+  if (stdDev < 12) return 'high';
+  return 'very high';
 }
 
 /** Total win for one settled grid = ways win + (both keys ? 5x bet : 0). */
@@ -55,6 +70,7 @@ export function simulate(spins: number, bet = 100, rng: Rng = new DefaultRng()):
   let keyAwards = 0;
   let bigWins = 0;
   let maxWin = 0;
+  let sumSqX = 0; // sum of (roundWin / bet)^2, for volatility/std-dev
 
   for (let i = 0; i < spins; i++) {
     totalBet += bet;
@@ -84,17 +100,24 @@ export function simulate(spins: number, bet = 100, rng: Rng = new DefaultRng()):
     }
 
     totalWin += roundWin;
+    const x = roundWin / bet;
+    sumSqX += x * x;
     if (roundWin > 0) hitCount++;
     if (roundWin >= bet * 20) bigWins++;
     if (roundWin > maxWin) maxWin = roundWin;
   }
+
+  const rtp = totalWin / totalBet;
+  // Variance of per-round return (in bet units): E[x^2] - E[x]^2, where E[x] = rtp.
+  const variance = Math.max(0, sumSqX / spins - rtp * rtp);
+  const stdDev = Math.sqrt(variance);
 
   return {
     spins,
     bet,
     totalBet,
     totalWin,
-    rtp: totalWin / totalBet,
+    rtp,
     hitFrequency: hitCount / spins,
     hitCount,
     bonusTriggers,
@@ -104,5 +127,9 @@ export function simulate(spins: number, bet = 100, rng: Rng = new DefaultRng()):
     bigWins,
     maxWin,
     maxWinX: maxWin / bet,
+    averageWin: totalWin / spins,
+    averageWinPerHit: hitCount > 0 ? totalWin / hitCount : 0,
+    stdDev,
+    volatility: classifyVolatility(stdDev),
   };
 }

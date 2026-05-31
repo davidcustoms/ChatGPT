@@ -102,19 +102,29 @@ Edit `src/game/paytable.ts`:
 uses `DefaultRng` (Math.random); tests use the deterministic `SeededRng`. Replace
 `DefaultRng` with a certified RNG later without touching the engine.
 
-### Measuring RTP
+### Measuring RTP (DEMO MATH ONLY)
 `npm run sim` replays the full game flow (base spins + free-spin rounds) through
-the real engine and reports **RTP**, hit frequency, bonus-trigger rate, big-win
-count and max win. Use it to retune weights/paytable with real numbers.
+the real engine and prints a demo math report: **estimated RTP**, **hit
+frequency**, **bonus frequency**, **average win** (per spin and per hit),
+**max win**, big-win count, and **volatility notes** (std-dev of return + a
+low/medium/high classification). Use it to retune weights/paytable with real
+numbers.
 
 ```bash
-npm run sim                       # 1,000,000 spins @ bet 100
+npm run sim                       # 1,000,000 spins @ bet 100 (default)
 npm run sim -- --spins 5000000    # more spins for tighter numbers
 npm run sim -- --seed 42          # reproducible run (SeededRng)
+npm run sim -- --bet 200          # different bet level
 ```
 
-The shipped config measures ~94–95% RTP (high-volatility profile, bonus ~1 in
-330). Change a paytable value and re-run to see the impact immediately.
+> These figures are **DEMO MATH ONLY** — a `Math.random` model of an original
+> free-play game using fake credits. They are not a certified RTP or a
+> regulatory return statement.
+
+A seeded 1,000,000-spin run of the shipped config measures **~94.6% RTP**,
+**37% hit frequency**, bonus **~1 in 330**, max win **~3500× bet**, and
+**HIGH volatility** (σ ≈ 9.3× bet) — most of the return sits in the free-spins
+bonus. Change a paytable value and re-run to see the impact immediately.
 
 ---
 

@@ -13,6 +13,13 @@ describe('simulate', () => {
     expect(s.hitFrequency).toBeGreaterThanOrEqual(0);
     expect(s.hitFrequency).toBeLessThanOrEqual(1);
     expect(s.bonusTriggers).toBeGreaterThanOrEqual(0);
+
+    // Average win per spin equals RTP * bet by definition.
+    expect(s.averageWin).toBeCloseTo(s.rtp * s.bet, 6);
+    // Volatility metrics are present and sane.
+    expect(Number.isFinite(s.stdDev)).toBe(true);
+    expect(s.stdDev).toBeGreaterThanOrEqual(0);
+    expect(['low', 'medium', 'high', 'very high']).toContain(s.volatility);
   });
 
   it('is deterministic for a fixed seed', () => {
