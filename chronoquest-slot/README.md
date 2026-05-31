@@ -75,7 +75,15 @@ and renderer-agnostic.
   spin → instant **5× bet**.
 - **Chrono Showdown (Super Bonus):** 3+ scatters **and** both keys in the same
   spin → 12 free spins, starting at **×3**, with sticky wilds active.
-- **Big Win** celebration when a spin pays **20× bet** or more.
+- **Win tiers:** escalating celebrations — **BIG** (≥20×), **MEGA** (≥50×),
+  **EPIC** (≥100×) — each with bigger banners, longer star showers and a louder
+  fanfare.
+- **Configurable autoplay:** the AUTO button opens a panel to pick a spin count
+  (10 / 25 / 50 / ∞) and stop conditions (stop on win, stop on bonus).
+- **Ambient music:** a procedural background bed that intensifies during the
+  bonus; silenced by the **SOUND** toggle like all audio.
+- **Saved session:** fake-credit balance, bet level and mute persist across
+  reloads (localStorage); the **↺ reset** control under CREDITS restores 10,000.
 
 ---
 
@@ -152,10 +160,10 @@ them in `BootScene` and play them inside these same four hook functions.
 
 ## Ideas for what to improve next
 
-- A layered music track / ambience on top of the procedural SFX.
-- Configurable autoplay (spin count, stop-on-win/bonus).
-- Persisted balance + settings via `localStorage`.
 - Real sprite/audio assets dropped in over the procedural placeholders.
+- A settings screen (volume slider, animation speed, turbo spin).
+- Win-history / session-stats panel.
+- Mobile touch layout + responsive scaling tweaks.
 
 ---
 

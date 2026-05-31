@@ -14,7 +14,7 @@ import {
   getSymbolGrid,
   makeInactiveBonus,
 } from '../game/slotEngine';
-import { Hud } from '../ui/Hud';
+import { Hud, type AutoOptions } from '../ui/Hud';
 import { Background } from '../ui/Background';
 import { texKey } from '../ui/symbolTextures';
 import { FX_SPARK, FX_STAR } from '../ui/fxTextures';
@@ -65,6 +65,9 @@ export class SlotScene extends Phaser.Scene {
   private reelX: number[] = [];
   private betIndex = 1; // default 100
   private auto = false;
+  private autoRemaining = 0;
+  private autoStopOnWin = false;
+  private autoStopOnBonus = true;
   private muted = false;
   private reelsDone = 0;
   private flashRect?: Phaser.GameObjects.Rectangle;
@@ -117,7 +120,8 @@ export class SlotScene extends Phaser.Scene {
 
     this.hud = new Hud(this, {
       onSpin: () => this.onSpinClicked(),
-      onToggleAuto: () => this.toggleAuto(),
+      onStartAuto: (opts) => this.startAuto(opts),
+      onStopAuto: () => this.stopAuto(),
       onBetChange: (d) => this.changeBet(d),
       onToggleMute: () => this.toggleMute(),
       onInfo: () => this.openInfo(),
@@ -344,13 +348,26 @@ export class SlotScene extends Phaser.Scene {
     this.doSpin(false);
   }
 
-  private toggleAuto(): void {
+  private startAuto(opts: AutoOptions): void {
     initAudio();
     startMusic();
-    if (this.state.bonus.active) return;
-    this.auto = !this.auto;
-    this.hud.setAutoActive(this.auto);
-    if (this.auto && !this.state.spinning) this.doSpin(false);
+    if (this.state.bonus.active || this.state.spinning) return;
+    if (this.state.credits < this.state.bet) {
+      this.state.message = 'Not enough credits — lower your bet.';
+      this.hud.update(this.state);
+      return;
+    }
+    this.auto = true;
+    this.autoRemaining = opts.count;
+    this.autoStopOnWin = opts.stopOnWin;
+    this.autoStopOnBonus = opts.stopOnBonus;
+    this.hud.setAutoRunning(this.autoRemaining);
+    this.doSpin(false);
+  }
+
+  private stopAuto(): void {
+    this.auto = false;
+    this.hud.setAutoRunning(null);
   }
 
   private toggleMute(): void {
@@ -383,8 +400,7 @@ export class SlotScene extends Phaser.Scene {
     if (!isFree && !this.state.bonus.active) {
       if (this.state.credits < this.state.bet) {
         this.state.message = 'Not enough credits — lower your bet.';
-        this.auto = false;
-        this.hud.setAutoActive(false);
+        this.stopAuto();
         this.hud.update(this.state);
         return;
       }
@@ -604,9 +620,6 @@ export class SlotScene extends Phaser.Scene {
             ? `★ CHRONO SHOWDOWN! ${trig.freeSpinsAwarded} free spins · starting x${SUPER_BONUS.startMultiplier} ★`
             : `Time Portal! ${trig.freeSpinsAwarded} free spins awarded!`,
         );
-        // Manual play is locked during the bonus.
-        this.auto = false;
-        this.hud.setAutoActive(false);
       }
     } else {
       this.state.bonus.freeSpins -= 1;
@@ -618,6 +631,12 @@ export class SlotScene extends Phaser.Scene {
     if (win > 0) this.hud.animateWin(win);
     else this.hud.setWin(0);
     this.persist();
+
+    // Count this base spin against the autoplay budget.
+    if (this.auto && !wasInBonus) {
+      this.autoRemaining = this.autoRemaining === Infinity ? Infinity : this.autoRemaining - 1;
+      this.hud.setAutoRunning(this.autoRemaining);
+    }
 
     // Play the cinematic bonus intro before the free spins begin.
     if (justTriggered) {
@@ -645,14 +664,17 @@ export class SlotScene extends Phaser.Scene {
     }
 
     if (this.auto) {
-      if (this.state.credits >= this.state.bet) {
+      const stop =
+        (this.autoStopOnWin && this.state.lastWin > 0) ||
+        this.autoRemaining <= 0 ||
+        this.state.credits < this.state.bet;
+      if (!stop) {
         this.time.delayedCall(650, () => {
-          if (this.auto && !this.state.spinning) this.doSpin(false);
+          if (this.auto && !this.state.spinning && !this.state.bonus.active) this.doSpin(false);
         });
         return;
       }
-      this.auto = false;
-      this.hud.setAutoActive(false);
+      this.stopAuto();
     }
 
     this.hud.setSpinEnabled(true);
@@ -667,7 +689,23 @@ export class SlotScene extends Phaser.Scene {
       : 'Bonus complete — back to base game.';
     this.hud.setMultiplier(1);
     this.hud.update(this.state);
-    this.hud.setSpinEnabled(true);
+
+    // Resume or stop autoplay after the bonus, per the player's settings.
+    if (this.auto) {
+      const stop =
+        this.autoStopOnBonus || this.autoRemaining <= 0 || this.state.credits < this.state.bet;
+      if (stop) {
+        this.stopAuto();
+        this.hud.setSpinEnabled(true);
+      } else {
+        this.hud.setAutoRunning(this.autoRemaining);
+        this.time.delayedCall(800, () => {
+          if (this.auto && !this.state.spinning) this.doSpin(false);
+        });
+      }
+    } else {
+      this.hud.setSpinEnabled(true);
+    }
   }
 
   // --- Highlight / FX ------------------------------------------------------
