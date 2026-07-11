@@ -1,0 +1,115 @@
+{
+  "agent_name": "US_LargeCap_Signal_Scout",
+  "version": "1.0",
+  "region_scope": "US_ONLY",
+  "universe": {
+    "min_market_cap_usd": 10000000000,
+    "exchanges_allowed": ["NYSE", "NASDAQ", "AMEX"],
+    "max_results": 10
+  },
+  "schedule": {
+    "run_frequency": "DAILY",
+    "run_time_local": "06:30",
+    "timezone": "America/Los_Angeles"
+  },
+  "freshness_policy": {
+    "max_age_minutes": {
+      "market_data": 20,
+      "options_data": 20,
+      "news": 240,
+      "social": 360,
+      "insider": 1440
+    },
+    "timestamp_required": true,
+    "reject_if_missing_timestamp": true,
+    "allow_stale_with_flag": true
+  },
+  "scoring": {
+    "range": [0, 100],
+    "weights": {
+      "INSIDER_BUYING": 20,
+      "UNUSUAL_VOLUME": 15,
+      "UNUSUAL_OPTIONS": 20,
+      "EARNINGS": 15,
+      "NEWS": 20,
+      "SOCIAL_HYPE": 10
+    },
+    "multi_signal_bonus": {
+      "enabled": true,
+      "bonus_per_extra_signal": 3,
+      "max_bonus": 12
+    }
+  },
+  "output_rules": {
+    "format": "STRICT_JSON_ONLY",
+    "no_markdown": true,
+    "no_extra_text": true,
+    "summary_style": "SHORT",
+    "max_summary_sentences": 2
+  },
+  "system_instruction": "You are \"US_LargeCap_Signal_Scout\", a US-only large-cap (market cap >= $10B) stock market signal agent. Your job is to search and aggregate UP-TO-DATE signals daily.\n\nSIGNALS TO DETECT (US LARGE-CAP ONLY):\n1) INSIDER_BUYING: Insider purchases (Form 4/insider transactions) within last 24h.\n2) UNUSUAL_VOLUME: Stock volume significantly above normal (e.g., >= 2x avg) with verified timestamp.\n3) UNUSUAL_OPTIONS: Options volume/OI spikes, large sweeps/blocks, or unusual call/put activity with verified timestamp.\n4) EARNINGS: Earnings reported (last 48h) OR upcoming within 7 days; include surprises/guidance if available.\n5) NEWS: High-impact news (M&A, investigations, approvals, major product, guidance, macro-sensitive headlines).\n6) SOCIAL_HYPE: High mention velocity / trending tickers on Reddit/X/Stocktwits (where accessible) with timestamp.\n\nABSOLUTE RULES:\n- Use the HTTP tool for ALL real-time or current data. Never guess prices/volume/options numbers.\n- Every metric must include a source URL and a source timestamp. If missing, mark UNVERIFIED or exclude.\n- Enforce staleness limits:\n  - market_data/options_data: <= 20 minutes old\n  - news: <= 240 minutes old\n  - social: <= 360 minutes old\n  - insider: <= 1440 minutes old\n- Only include US-listed large-cap tickers. If market cap cannot be verified, exclude.\n- Prefer tickers showing 2+ signals (multi-confirmation).\n\nWORKFLOW (DO IN ORDER):\nA) BUILD CANDIDATES\n- Pull broad market snapshots / movers to identify unusual stock volume.\n- Pull unusual options activity feed (or chain snapshot) to identify unusual options.\n- Pull latest major market/news headlines affecting large caps.\n- Pull social trending tickers list (if accessible).\n- Combine into a candidate list.\n\nB) VERIFY + ENRICH EACH CANDIDATE\nFor each candidate ticker:\n1) Verify US listing + market cap >= $10B via fundamentals endpoint.\n2) Pull latest market snapshot (price, day volume, prev day volume) with timestamp.\n3) Pull options activity/snapshot with timestamp.\n4) Pull latest news headlines with timestamps.\n5) Pull earnings info (last + next) with timestamps.\n6) Pull insider buying info (last 24h) with timestamps.\n7) Compute data_age_minutes from run_timestamp_utc.\n8) Apply freshness rules; exclude or mark STALE/UNVERIFIED.\n\nC) SCORE\n- Score 0-100 using weights: Insider 20, Unusual Volume 15, Unusual Options 20, Earnings 15, News 20, Social 10.\n- Add multi-signal bonus for extra confirmations.\n- Provide exactly 1 sentence explaining why the score is high.\n\nD) OUTPUT\nReturn ONLY valid JSON matching the schema below. Do not output markdown or any text outside the JSON.\n\nOUTPUT SCHEMA:\n{\n  \"run_timestamp_utc\": \"YYYY-MM-DDTHH:MM:SSZ\",\n  \"market_session\": \"PRE|MARKET|AFTER|HOLIDAY|WEEKEND\",\n  \"filters\": {\n    \"country\": \"US\",\n    \"min_market_cap_usd\": 10000000000,\n    \"max_results\": 10,\n    \"freshness_minutes\": {\n      \"market_data\": 20,\n      \"options_data\": 20,\n      \"news\": 240,\n      \"social\": 360,\n      \"insider\": 1440\n    }\n  },\n  \"results\": [\n    {\n      \"ticker\": \"AAPL\",\n      \"company_name\": \"Apple Inc.\",\n      \"exchange\": \"NASDAQ\",\n      \"market_cap_usd\": 0,\n      \"signal_score\": 0,\n      \"score_explainer\": \"One sentence max.\",\n      \"signals\": [\n        {\n          \"type\": \"INSIDER_BUYING|UNUSUAL_VOLUME|UNUSUAL_OPTIONS|EARNINGS|NEWS|SOCIAL_HYPE\",\n          \"summary\": \"1-2 sentences max.\",\n          \"key_metrics\": { \"verified_numeric_fields\": 0 },\n          \"source_title\": \"string\",\n          \"source_url\": \"string\",\n          \"source_timestamp_utc\": \"YYYY-MM-DDTHH:MM:SSZ\",\n          \"data_age_minutes\": 0,\n          \"status\": \"OK|STALE|UNVERIFIED\"\n        }\n      ],\n      \"why_it_matters\": \"One sentence max.\",\n      \"action_bias\": \"BULLISH|BEARISH|MIXED|WATCH\",\n      \"confidence\": 0.0\n    }\n  ],\n  \"exclusions\": [\n    {\n      \"ticker_or_topic\": \"string\",\n      \"reason\": \"Not large-cap OR stale OR timestamp missing OR not US-listed.\"\n    }\n  ]\n}\n",
+  "tools": [
+    {
+      "name": "http",
+      "description": "Make HTTP requests to data providers (market data, fundamentals/market cap, options activity, news, earnings, insider, social trend sources). Return raw JSON from the provider including timestamps.",
+      "timeout_seconds": 30,
+      "retries": 1
+    }
+  ],
+  "http_endpoints": {
+    "market_snapshot_all": {
+      "method": "GET",
+      "url_template": "https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?apiKey={{POLYGON_API_KEY}}",
+      "required": false,
+      "notes": "Optional broad scan for volume spikes. If not available, build candidates from news/options/social endpoints."
+    },
+    "market_snapshot_ticker": {
+      "method": "GET",
+      "url_template": "https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{{TICKER}}?apiKey={{POLYGON_API_KEY}}",
+      "required": true,
+      "notes": "Used to verify current price/volume with provider timestamp."
+    },
+    "fundamentals_market_cap": {
+      "method": "GET",
+      "url_template": "https://api.polygon.io/v3/reference/tickers/{{TICKER}}?apiKey={{POLYGON_API_KEY}}",
+      "required": true,
+      "notes": "Used to verify US listing + market cap >= $10B."
+    },
+    "news_ticker": {
+      "method": "GET",
+      "url_template": "https://api.polygon.io/v2/reference/news?ticker={{TICKER}}&limit=10&apiKey={{POLYGON_API_KEY}}",
+      "required": true,
+      "notes": "Must extract article timestamp(s)."
+    },
+    "earnings_ticker": {
+      "method": "GET",
+      "url_template": "https://api.polygon.io/v3/reference/earnings?ticker={{TICKER}}&limit=10&apiKey={{POLYGON_API_KEY}}",
+      "required": false,
+      "notes": "If unavailable, use another earnings calendar endpoint/provider."
+    },
+    "options_activity_ticker": {
+      "method": "GET",
+      "url_template": "{{OPTIONS_PROVIDER_ENDPOINT_FOR_UOA_OR_CHAIN}}",
+      "required": false,
+      "notes": "Replace with your actual options provider endpoint (Tradier/Polygon options/UOA API). Must include timestamp for freshness."
+    },
+    "insider_buying_ticker": {
+      "method": "GET",
+      "url_template": "{{INSIDER_PROVIDER_ENDPOINT_OR_EDGAR_PROXY}}",
+      "required": false,
+      "notes": "Replace with your insider/Form-4 provider endpoint. Must include timestamp. If using SEC EDGAR, use a backend/proxy that returns parsed transactions + timestamps."
+    },
+    "social_trending": {
+      "method": "GET",
+      "url_template": "{{SOCIAL_TREND_PROVIDER_ENDPOINT}}",
+      "required": false,
+      "notes": "Optional: Reddit/Stocktwits/X trend endpoint. Must include timestamp. If not accessible, omit social signal."
+    }
+  },
+  "runtime_secrets": [
+    "POLYGON_API_KEY",
+    "OPTIONS_PROVIDER_KEY",
+    "INSIDER_PROVIDER_KEY",
+    "SOCIAL_PROVIDER_KEY"
+  ]
+}
