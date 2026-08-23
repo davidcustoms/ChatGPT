@@ -608,9 +608,9 @@ function ReportDocument({
           }))}
         />
         <Text style={styles.note}>
-          This report is management information derived from {payload.sourceSystem} on a{' '}
-          {payload.basisLabel.toLowerCase()}. It is not an audit, a tax opinion, or a substitute for review by
-          your CPA.
+          This report is management information derived from {payload.sourceSystem} on{' '}
+          {payload.accountingMethod === 'Accrual' ? 'an' : 'a'} {payload.basisLabel.toLowerCase()}. It is not
+          an audit, a tax opinion, or a substitute for review by your CPA.
         </Text>
         {branding.footerText ? <Text style={styles.note}>{branding.footerText}</Text> : null}
         <Footer payload={payload} branding={branding} />
