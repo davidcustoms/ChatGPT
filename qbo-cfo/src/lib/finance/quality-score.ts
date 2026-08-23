@@ -9,7 +9,12 @@ import { round2 } from './math';
  * output can raise or lower it.
  */
 
-export type QualityBand = 'excellent' | 'good' | 'needs_review' | 'low';
+/**
+ * `unknown` is not a score band the engine produces. It marks a report stored
+ * before scoring existed, so the card reads "not scored" rather than showing a
+ * fabricated zero as if the bookkeeping were bad.
+ */
+export type QualityBand = 'excellent' | 'good' | 'needs_review' | 'low' | 'unknown';
 
 export interface Deduction {
   factor: string;

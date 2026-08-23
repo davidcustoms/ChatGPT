@@ -5,7 +5,7 @@ import { getReport } from '@/lib/db/repositories/reports';
 import { recordAudit } from '@/lib/db/repositories/audit';
 import { AppError, toErrorPayload } from '@/lib/errors';
 import { renderReportPdf } from '@/lib/reports/pdf';
-import type { ReportPayload } from '@/lib/reports/types';
+import { normalizeReportPayload } from '@/lib/reports/migrate';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -27,7 +27,7 @@ export async function GET(
     }
 
     const branding = await getBranding(report.companyId);
-    const buffer = await renderReportPdf(report.payload as ReportPayload, branding);
+    const buffer = await renderReportPdf(normalizeReportPayload(report.payload), branding);
 
     await recordAudit({
       companyId: report.companyId,

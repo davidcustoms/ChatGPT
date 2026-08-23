@@ -5,7 +5,7 @@ import { getReport } from '@/lib/db/repositories/reports';
 import { recordAudit } from '@/lib/db/repositories/audit';
 import { AppError, toErrorPayload } from '@/lib/errors';
 import { renderReportWorkbook } from '@/lib/reports/excel';
-import type { ReportPayload } from '@/lib/reports/types';
+import { normalizeReportPayload } from '@/lib/reports/migrate';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -26,7 +26,7 @@ export async function GET(
       throw new AppError('VALIDATION', 'This report has not finished generating yet.');
     }
 
-    const buffer = await renderReportWorkbook(report.payload as ReportPayload);
+    const buffer = await renderReportWorkbook(normalizeReportPayload(report.payload));
     await recordAudit({
       companyId: report.companyId,
       userId: user.id,

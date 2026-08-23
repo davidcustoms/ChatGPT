@@ -13,6 +13,7 @@ import { ErrorNotice } from '@/components/ui/states';
 import { PageHeader } from '@/components/layout/page-header';
 import { ReportView } from '@/components/report/report-view';
 import type { ReportPayload } from '@/lib/reports/types';
+import { normalizeReportPayload } from '@/lib/reports/migrate';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +53,7 @@ export default async function ReportDetailPage({
     );
   }
 
-  const payload = report.payload as ReportPayload;
+  const payload = normalizeReportPayload(report.payload);
   // Insights are stored separately so they can be regenerated without rebuilding
   // the deterministic payload.
   const [insights, staleness, versions] = await Promise.all([

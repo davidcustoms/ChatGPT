@@ -8,14 +8,27 @@ import { logger } from '../logger';
 /**
  * Idempotent schema application. The schema file is written with
  * CREATE TABLE IF NOT EXISTS throughout, so re-running is safe.
+ *
+ * Serialised behind a session-level advisory lock: `CREATE TABLE IF NOT
+ * EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` are individually
+ * idempotent but not safe to run concurrently -- two instances booting at the
+ * same moment can deadlock on the system catalogs. The second holder finds the
+ * schema already applied and its statements become no-ops.
  */
+const MIGRATION_LOCK_KEY = 4_721_883;
+
 export async function runMigrations(schemaPath?: string): Promise<void> {
   const file = schemaPath ?? path.join(process.cwd(), 'db', 'schema.sql');
   const sql = await readFile(file, 'utf8');
   const client = await getPool().connect();
   try {
-    await client.query(sql);
-    logger.info('schema applied', { file });
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
+    try {
+      await client.query(sql);
+      logger.info('schema applied', { file });
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]);
+    }
   } finally {
     client.release();
   }
