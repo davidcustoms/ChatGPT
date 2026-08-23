@@ -44,6 +44,9 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 ## 3. QuickBooks connection
 
+Full walkthrough: [`INTUIT_PRODUCTION_SETUP.md`](INTUIT_PRODUCTION_SETUP.md).
+
+
 - [ ] `INTUIT_ENVIRONMENT=production`
 - [ ] `INTUIT_REDIRECT_URI` matches a redirect URI registered on the Intuit app
       **exactly**, including scheme, host, port and path
@@ -56,6 +59,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 ## 4. Data validation — **BLOCKING**
 
+- [ ] `npm run validate:live` (or `/validation/live-qbo`) reports
+      **Production Ready: YES** — all fourteen gate criteria pass
 - [ ] `npm run validate:qbo` passes with `INTUIT_ENVIRONMENT=production`
 - [ ] Every difference the harness reports is recorded in
       `docs/SANDBOX_VS_PRODUCTION.md` with the action taken

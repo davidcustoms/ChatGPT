@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Receipt,
   Settings,
+  ShieldCheck,
   ShoppingBag,
   Wallet,
 } from 'lucide-react';
@@ -45,6 +46,7 @@ const NAV_SECTIONS: Array<{
     items: [
       { href: '/transactions-review', label: 'Transactions', icon: BarChart3 },
       { href: '/monthly-close', label: 'Monthly Close', icon: CalendarCheck },
+      { href: '/validation/live-qbo', label: 'Live Validation', icon: ShieldCheck },
     ],
   },
   {

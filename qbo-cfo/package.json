@@ -16,7 +16,8 @@
     "validate:qbo": "tsx scripts/validate-live-qbo.ts",
     "reconcile": "tsx scripts/reconcile.ts",
     "chat:qa": "tsx scripts/chat-qa.ts",
-    "benchmark": "tsx scripts/benchmark.ts"
+    "benchmark": "tsx scripts/benchmark.ts",
+    "validate:live": "tsx scripts/validate-live.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.6",

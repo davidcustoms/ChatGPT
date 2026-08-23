@@ -8,8 +8,8 @@ Last updated: 2026-08-23
 
 | Gate | Status | Evidence |
 |---|---|---|
-| **Production Ready** | **NO** | Three gates below are unmet. Do not run a real company's month-end on this yet |
-| **Live QBO Tested** | **NO** | Requires Intuit production credentials and a human OAuth consent. `npm run validate:qbo` is written and runnable; it has never been run against a production realm |
+| **Production Ready** | **NO** | 14 of 14 gate criteria are unmet, all for one reason: no production QuickBooks company has been connected. See `docs/LIVE_VALIDATION.md` for the machine-generated gate table |
+| **Live QBO Tested** | **NO** | Production OAuth needs Intuit production credentials and a person at Intuit's consent screen. Neither can be done from here. The validation runs end to end the moment a company is connected — see `docs/INTUIT_PRODUCTION_SETUP.md` |
 | **Financial Reconciliation** | **PASS — demo data only** | `npm run reconcile`: 18 of 18 lines MATCH at $0.00, including `Assets = Liabilities + Equity`. See `docs/RECONCILIATION.md`. Not yet run against a production company |
 | **Security Review** | **PASS** | `docs/SECURITY_REVIEW.md`. 23 database-backed security tests plus 20 prompt-injection tests. Three issues found and fixed in the same pass |
 | **CFO Chat QA** | **PASS** | 60 of 60 questions pass. Every dollar figure stated is present in the deterministic result the resolver computed. See `docs/CFO_CHAT_QA.md` |
@@ -18,8 +18,8 @@ Last updated: 2026-08-23
 
 ### Why "Production Ready" is NO
 
-Three of the ten acceptance conditions cannot be met without credentials this
-build does not have:
+The gate has fourteen criteria and none of them passes, because all fourteen
+depend on a live connection that does not exist yet:
 
 1. **Live QuickBooks validation.** Connecting a production company requires an
    Intuit production client id and secret, and a human completing the OAuth
@@ -31,8 +31,17 @@ build does not have:
    against synthetic data.
 3. **A month-end run on real books.** Follows from the first two.
 
-Everything that does not depend on live credentials has been built, exercised
-and documented. `docs/PRODUCTION_CHECKLIST.md` is the path from here to yes.
+The validation engine itself is built and proved. `tests/integration/live-validation.test.ts`
+runs seven of the nine validators — dates, drill-down, mapping, locations,
+chat, report and immutability — against real stored data, and asserts each one
+catches the defect it exists to catch: a report labelled with the wrong month,
+a store conclusion drawn without store data, a payload that moved after
+generation. The two that need a live client (the connection checklist and the
+read-only proof) are covered by `tests/qbo-client.test.ts`.
+
+So when a company is finally connected, only the live calls are new.
+`docs/PRODUCTION_CHECKLIST.md` and `docs/INTUIT_PRODUCTION_SETUP.md` are the
+path from here to yes.
 
 ---
 
@@ -113,13 +122,22 @@ and documented. `docs/PRODUCTION_CHECKLIST.md` is the path from here to yes.
 - Typed operational event vocabulary (`oauth.*`, `qbo.*`, `sync.*`, `report.*`, `ai.*`, `scheduler.*`)
 - Structural prompt-injection defence: QuickBooks fields are neutralised, JSON-encoded, length-capped and emitted only inside a labelled data block; injection-looking values are logged for operators and shown unaltered to the owner
 
+### Phase 10 — Live production validation
+- `/validation/live-qbo`, labelled **LIVE QUICKBOOKS — READ ONLY**, running the whole gate against a connected company and rendering PASS / FAIL / NOT AVAILABLE per check
+- `npm run validate:live`, the same run from a shell, writing `docs/LIVE_VALIDATION.md` and exiting non-zero when the gate does not pass
+- Nine validators: connection checklist, read-only proof, reconciliation, dates, drill-down, mapping review, location/store confirmation, live chat QA, report and immutability
+- A fourteen-criterion production gate that reports YES only when every criterion passes, and names the exact blocker otherwise
+- NOT AVAILABLE is a distinct outcome throughout: a QuickBooks feature this company does not use is never counted as an application failure
+- OAuth scope reduced to `com.intuit.quickbooks.accounting` alone; `openid`, `profile` and `email` were requested but never used
+- `docs/INTUIT_PRODUCTION_SETUP.md`: every value to configure, what to click during OAuth, and the troubleshooting table
+
 ### Cross-cutting
 - Demo mode: 24 months of synthetic multi-store furniture-retail data that flows through the real pipeline
 - Onboarding wizard whose step completion is derived from real state
 - Source traceability: drill-down from a category total to accounts, transactions and QuickBooks ids
 - Audit log for connections, syncs, mapping changes, report generation and exports
 - Typed error taxonomy with retryability and user-facing recovery guidance
-- 409 tests: unit, mock-dataset, database integration, security, prompt injection, export QA, legacy-payload compatibility, timezone safety, and an Intuit sandbox suite
+- 425 tests: unit, mock-dataset, database integration, security, prompt injection, export QA, legacy-payload compatibility, timezone safety, live-validation engine, and an Intuit sandbox suite
 
 ---
 
@@ -175,7 +193,7 @@ instance. Nothing below is an estimate.
 
 - `npm run typecheck` — clean under strict TypeScript with `noUncheckedIndexedAccess`
 - `npm run build` — production build succeeds
-- `npm test` — **405 passed, 4 skipped** (the skips are the Intuit sandbox suite,
+- `npm test` — **421 passed, 4 skipped** (the skips are the Intuit sandbox suite,
   which needs live credentials). Run four consecutive times with no flake
 
 Suites that specifically back the gates above:
@@ -191,6 +209,7 @@ Suites that specifically back the gates above:
 | `tests/legacy-payloads.test.ts` | A report stored under an older payload shape still opens, exports, and shows its missing fields as missing rather than as zeros |
 | `tests/integration/timezone.test.ts` | Calendar dates survive a round trip through the database unshifted. Every assertion fails against the pre-fix code under TZ=Asia/Tokyo |
 | `tests/tie-out.test.ts` | The report's own totals are compared against QuickBooks' subtotals on every build, and a break caps the confidence score |
+| `tests/integration/live-validation.test.ts` | The live-validation engine: preconditions refuse rather than pretend, and each validator catches the defect it exists to catch |
 
 ### Manual and harness runs
 

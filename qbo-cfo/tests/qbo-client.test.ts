@@ -164,9 +164,11 @@ describe('OAuth token handling', () => {
     const url = new URL(buildAuthorizeUrl('state-value'));
     expect(url.searchParams.get('state')).toBe('state-value');
     expect(url.searchParams.get('response_type')).toBe('code');
-    expect(url.searchParams.get('scope')).toContain('com.intuit.quickbooks.accounting');
-    // The application never requests the payments or payroll write scopes.
+    // Exactly one scope: nothing here reads an id_token or calls userinfo, so
+    // openid/profile/email would ask for the owner's identity for no reason.
+    expect(url.searchParams.get('scope')).toBe('com.intuit.quickbooks.accounting');
     expect(url.searchParams.get('scope')).not.toContain('payment');
+    expect(url.searchParams.get('scope')).not.toContain('openid');
   });
 
   it('converts relative expiries into absolute instants', async () => {

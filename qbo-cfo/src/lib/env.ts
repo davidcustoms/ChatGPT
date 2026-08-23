@@ -82,4 +82,17 @@ export const INTUIT_REVOKE_URL =
  * scope Intuit exposes that still permits reading reports and entities; the
  * application never issues a write request against it.
  */
-export const INTUIT_SCOPES = ['com.intuit.quickbooks.accounting', 'openid', 'profile', 'email'];
+/**
+ * The only scope this application requests.
+ *
+ * `openid`, `profile` and `email` were also requested but never used: nothing
+ * here reads an id_token or calls Intuit's userinfo endpoint, because sessions
+ * are the application's own. Asking for them made the consent screen request
+ * the owner's Intuit identity for no reason.
+ *
+ * Accounting scope is read/write at Intuit's granularity -- there is no
+ * read-only accounting scope to request. The read-only guarantee is enforced
+ * in `src/lib/qbo/client.ts`, which issues GET only and refuses any mutating
+ * path or non-SELECT query.
+ */
+export const INTUIT_SCOPES = ['com.intuit.quickbooks.accounting'];

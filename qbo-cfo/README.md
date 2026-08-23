@@ -218,6 +218,7 @@ Each writes its output to `docs/`, so the claim and the evidence stay together.
 
 ```bash
 npm run validate:qbo    # read-only checks against a live QuickBooks company
+npm run validate:live   # the full production gate -> docs/LIVE_VALIDATION.md
 npm run reconcile       # every total against QuickBooks' own subtotals, to the cent
 npm run chat:qa         # 60 CFO chat questions -> docs/CFO_CHAT_QA.md
 npm run benchmark       # timings at 50k/100k/250k transactions -> docs/PERFORMANCE.md
@@ -324,6 +325,8 @@ npx vitest run --config vitest.config.mts tests/metrics.test.ts
 | [`docs/FINANCIAL_METRICS.md`](docs/FINANCIAL_METRICS.md) | Every formula, including the divide-by-zero rules |
 | [`docs/AI_GUARDRAILS.md`](docs/AI_GUARDRAILS.md) | What the model may and may not do, and how it is enforced |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Production deployment and operations |
+| [`docs/INTUIT_PRODUCTION_SETUP.md`](docs/INTUIT_PRODUCTION_SETUP.md) | Every value to configure at Intuit, what to click during OAuth, and what to do when it fails |
+| [`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md) | The last live validation run, and the fourteen-criterion production gate |
 | [`docs/PRODUCTION_CHECKLIST.md`](docs/PRODUCTION_CHECKLIST.md) | The gates to clear before a real company's month-end runs on this |
 | [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md) | Threat by threat, with the test that exercises each control |
 | [`docs/BACKUP_RECOVERY.md`](docs/BACKUP_RECOVERY.md) | What is at risk, backup schedule, restore procedure, recovery objectives |
@@ -336,10 +339,13 @@ npx vitest run --config vitest.config.mts tests/metrics.test.ts
 ## Production readiness
 
 **This build has never been run against a production QuickBooks company.**
-`docs/BUILD_STATUS.md` records which gates are met and which are not, and
-`docs/PRODUCTION_CHECKLIST.md` is the path from here to yes. Do not run a real
-company's month-end on it until the live validation and reconciliation gates
-pass.
+
+Connect one by following [`docs/INTUIT_PRODUCTION_SETUP.md`](docs/INTUIT_PRODUCTION_SETUP.md),
+then open `/validation/live-qbo` or run `npm run validate:live`. That runs the
+fourteen-criterion gate and writes the result to
+[`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md).
+
+Until every criterion passes, do not run a real company's month-end on this.
 
 ---
 
