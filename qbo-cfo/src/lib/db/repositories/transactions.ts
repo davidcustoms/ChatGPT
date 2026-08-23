@@ -1,4 +1,4 @@
-import { num, query, withTransaction } from '../pool';
+import { dateOnly, num, query, withTransaction } from '../pool';
 import type { Period } from '../../util/dates';
 
 export interface TransactionInput {
@@ -168,7 +168,7 @@ function mapTxn(r: Record<string, unknown>): TransactionRow {
     id: r['id'] as string,
     qboId: r['qbo_id'] as string,
     txnType: r['txn_type'] as string,
-    txnDate: (r['txn_date'] as Date).toISOString().slice(0, 10),
+    txnDate: dateOnly(r['txn_date']),
     docNumber: (r['doc_number'] as string | null) ?? null,
     entityName: (r['entity_name'] as string | null) ?? null,
     entityQboId: (r['entity_qbo_id'] as string | null) ?? null,
@@ -308,7 +308,7 @@ export async function duplicateCandidates(
   const rows = await query<{
     entity_name: string | null;
     amount: string;
-    dates: Date[];
+    dates: string[];
     count: string;
   }>(
     `SELECT entity_name, total_amount::text AS amount,
@@ -323,7 +323,7 @@ export async function duplicateCandidates(
   return rows.map((r) => ({
     entityName: r.entity_name,
     amount: num(r.amount),
-    dates: r.dates.map((d) => d.toISOString().slice(0, 10)),
+    dates: r.dates.map(dateOnly),
     count: Number(r.count),
   }));
 }

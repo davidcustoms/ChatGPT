@@ -1,4 +1,4 @@
-import { query, queryOne, withTransaction } from '../pool';
+import { dateOnly, query, queryOne, withTransaction } from '../pool';
 import type { AccountingMethod } from '../../finance/basis';
 import type { Period } from '../../util/dates';
 
@@ -39,8 +39,8 @@ interface Row {
   report_id: string;
   company_id: string;
   version: number;
-  period_start: Date;
-  period_end: Date;
+  period_start: string;
+  period_end: string;
   payload: unknown;
   executive_summary: string | null;
   confidence: string | null;
@@ -65,8 +65,8 @@ function toVersion(row: Row): ReportVersion {
     companyId: row.company_id,
     version: row.version,
     period: {
-      start: row.period_start.toISOString().slice(0, 10),
-      end: row.period_end.toISOString().slice(0, 10),
+      start: dateOnly(row.period_start),
+      end: dateOnly(row.period_end),
     },
     payload: row.payload,
     executiveSummary: row.executive_summary,

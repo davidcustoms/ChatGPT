@@ -1,4 +1,4 @@
-import { num, numOrNull, query, queryOne, withTransaction } from '../pool';
+import { dateOnly, num, numOrNull, query, queryOne, withTransaction } from '../pool';
 import type { AgingSnapshot, LocationMetrics, MonthlyMetrics, VendorSpend } from '../../finance/types';
 import { normalizeMethod, type AccountingMethod } from '../../finance/basis';
 import type { Period } from '../../util/dates';
@@ -18,8 +18,8 @@ const METRIC_COLUMNS = [
 
 interface MetricsRow {
   company_id: string;
-  period_start: Date;
-  period_end: Date;
+  period_start: string;
+  period_end: string;
   [key: string]: unknown;
 }
 
@@ -29,8 +29,8 @@ function toMetrics(row: MetricsRow): MonthlyMetrics {
   return {
     companyId: row.company_id,
     period: {
-      start: row.period_start.toISOString().slice(0, 10),
-      end: row.period_end.toISOString().slice(0, 10),
+      start: dateOnly(row.period_start),
+      end: dateOnly(row.period_end),
     },
     accountingMethod: normalizeMethod(row['accounting_method']),
     grossSales: n('gross_sales'),
@@ -171,14 +171,14 @@ export async function listAllMetrics(companyId: string, limit = 48): Promise<Mon
 }
 
 export async function latestMetricsPeriod(companyId: string): Promise<Period | null> {
-  const row = await queryOne<{ period_start: Date; period_end: Date }>(
+  const row = await queryOne<{ period_start: string; period_end: string }>(
     'SELECT period_start, period_end FROM monthly_metrics WHERE company_id = $1 ORDER BY period_start DESC LIMIT 1',
     [companyId],
   );
   if (!row) return null;
   return {
-    start: row.period_start.toISOString().slice(0, 10),
-    end: row.period_end.toISOString().slice(0, 10),
+    start: dateOnly(row.period_start),
+    end: dateOnly(row.period_end),
   };
 }
 
@@ -256,7 +256,7 @@ export async function categoryTotalsByPeriod(
   from: string,
   to: string,
 ): Promise<Array<{ periodStart: string; categoryKey: string | null; amount: number }>> {
-  const rows = await query<{ period_start: Date; category_key: string | null; amount: string }>(
+  const rows = await query<{ period_start: string; category_key: string | null; amount: string }>(
     `SELECT period_start, category_key, SUM(amount)::text AS amount
        FROM monthly_account_metrics
       WHERE company_id = $1 AND period_start >= $2 AND period_start <= $3
@@ -265,7 +265,7 @@ export async function categoryTotalsByPeriod(
     [companyId, from, to],
   );
   return rows.map((r) => ({
-    periodStart: r.period_start.toISOString().slice(0, 10),
+    periodStart: dateOnly(r.period_start),
     categoryKey: r.category_key,
     amount: num(r.amount),
   }));
@@ -388,7 +388,7 @@ export async function getVendorSpendRange(
   to: string,
 ): Promise<Array<VendorSpend & { periodStart: string }>> {
   const rows = await query<{
-    period_start: Date;
+    period_start: string;
     vendor_qbo_id: string | null;
     vendor_name: string;
     amount: string;
@@ -401,7 +401,7 @@ export async function getVendorSpendRange(
     [companyId, from, to],
   );
   return rows.map((r) => ({
-    periodStart: r.period_start.toISOString().slice(0, 10),
+    periodStart: dateOnly(r.period_start),
     vendorQboId: r.vendor_qbo_id,
     vendorName: r.vendor_name,
     amount: num(r.amount),
@@ -489,9 +489,9 @@ export async function latestAgingDate(
   companyId: string,
   kind: 'receivable' | 'payable',
 ): Promise<string | null> {
-  const row = await queryOne<{ as_of_date: Date }>(
+  const row = await queryOne<{ as_of_date: string }>(
     'SELECT as_of_date FROM aging_snapshots WHERE company_id = $1 AND kind = $2 ORDER BY as_of_date DESC LIMIT 1',
     [companyId, kind],
   );
-  return row ? row.as_of_date.toISOString().slice(0, 10) : null;
+  return row ? dateOnly(row.as_of_date) : null;
 }

@@ -1,4 +1,4 @@
-import { query, queryOne, withTransaction } from '../pool';
+import { dateOnly, query, queryOne, withTransaction } from '../pool';
 import type { AiInsight } from '../../finance/types';
 import type { Period } from '../../util/dates';
 
@@ -13,8 +13,8 @@ export type ReportStatus =
 export interface GeneratedReportRow {
   id: string;
   company_id: string;
-  period_start: Date;
-  period_end: Date;
+  period_start: string;
+  period_end: string;
   title: string;
   status: ReportStatus;
   confidence: 'high' | 'medium' | 'low' | null;
@@ -47,8 +47,8 @@ function toSummary(row: GeneratedReportRow): ReportSummary {
     id: row.id,
     companyId: row.company_id,
     period: {
-      start: row.period_start.toISOString().slice(0, 10),
-      end: row.period_end.toISOString().slice(0, 10),
+      start: dateOnly(row.period_start),
+      end: dateOnly(row.period_end),
     },
     title: row.title,
     status: row.status,

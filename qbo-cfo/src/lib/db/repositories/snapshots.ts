@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { query, queryOne } from '../pool';
+import { dateOnly, query, queryOne } from '../pool';
 import type { Period } from '../../util/dates';
 import type { AccountingMethod } from '../../finance/basis';
 
@@ -84,8 +84,8 @@ export async function getSnapshot<T = unknown>(
   const row = await queryOne<{
     id: string;
     report_type: string;
-    period_start: Date;
-    period_end: Date;
+    period_start: string;
+    period_end: string;
     dimension: SnapshotDimension;
     payload: T;
     source_fetched_at: Date;
@@ -112,15 +112,15 @@ export async function listSnapshotPeriods(
   companyId: string,
   reportType: ReportType | string,
 ): Promise<Period[]> {
-  const rows = await query<{ period_start: Date; period_end: Date }>(
+  const rows = await query<{ period_start: string; period_end: string }>(
     `SELECT period_start, period_end FROM report_snapshots
       WHERE company_id = $1 AND report_type = $2 AND dimension = 'total'
       ORDER BY period_start`,
     [companyId, reportType],
   );
   return rows.map((r) => ({
-    start: r.period_start.toISOString().slice(0, 10),
-    end: r.period_end.toISOString().slice(0, 10),
+    start: dateOnly(r.period_start),
+    end: dateOnly(r.period_end),
   }));
 }
 

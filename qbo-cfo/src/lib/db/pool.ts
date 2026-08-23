@@ -1,4 +1,4 @@
-import { Pool, type PoolClient, type QueryResultRow } from 'pg';
+import { Pool, types as pgTypes, type PoolClient, type QueryResultRow } from 'pg';
 import { env } from '../env';
 import { AppError } from '../errors';
 import { logger } from '../logger';
@@ -9,6 +9,37 @@ import { logger } from '../logger';
  * we parse those explicitly at the repository boundary instead of globally,
  * so nothing silently becomes an imprecise float.
  */
+
+/**
+ * DATE columns must never become JS `Date` objects.
+ *
+ * By default `pg` parses a DATE into a `Date` at **local** midnight. Read back
+ * with `toISOString()` anywhere east of UTC, `2026-07-01` becomes
+ * `2026-06-30` -- every reporting period would silently shift a day, and a
+ * month boundary would shift the whole month. A report labelled "July" would
+ * be June's numbers.
+ *
+ * A calendar date has no timezone. `period_start`, `period_end`, `txn_date`
+ * and `as_of_date` are calendar dates, so they stay the strings Postgres
+ * already formats them as, which is exactly the `YYYY-MM-DD` the rest of the
+ * application works in (see `src/lib/util/dates.ts`).
+ *
+ * TIMESTAMPTZ is deliberately left alone: those are absolute instants and the
+ * default `Date` parsing is correct for them.
+ */
+const DATE_OID = 1082;
+// `pg`'s TypeId union does not name the date[] OID, so it is cast.
+const DATE_ARRAY_OID = 1182 as Parameters<typeof pgTypes.setTypeParser>[0];
+
+pgTypes.setTypeParser(DATE_OID, (value: string): string => value);
+pgTypes.setTypeParser(DATE_ARRAY_OID, (value: string): string[] =>
+  value === '{}'
+    ? []
+    : value
+        .replace(/^\{|\}$/g, '')
+        .split(',')
+        .map((v) => v.replace(/^"|"$/g, '')),
+);
 
 declare global {
   // eslint-disable-next-line no-var
@@ -98,12 +129,21 @@ export function isoOrNull(value: unknown): string | null {
   return String(value);
 }
 
-/** Date columns come back as JS Date at UTC midnight; render as YYYY-MM-DD. */
+/**
+ * Renders a DATE column as `YYYY-MM-DD`.
+ *
+ * With the type parser above, DATE already arrives as that string and this is
+ * a slice. The `Date` branch is a backstop for a value that reached us some
+ * other way (a driver without the parser registered, a hand-built object in a
+ * test): such a Date was constructed at **local** midnight, so its calendar
+ * date is read with the local accessors, not the UTC ones. Using
+ * `getUTCDate()` here is what produced the off-by-one this guards against.
+ */
 export function dateOnly(value: unknown): string {
   if (value instanceof Date) {
-    const y = value.getUTCFullYear();
-    const m = String(value.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(value.getUTCDate()).padStart(2, '0');
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
   return String(value ?? '').slice(0, 10);
