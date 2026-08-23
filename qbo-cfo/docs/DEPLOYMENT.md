@@ -135,6 +135,34 @@ today is skipped.
 
 ### Health
 
+`GET /api/health` is unauthenticated by design — a load balancer has to reach
+it — and carries no secret. It reports whether each dependency is *configured*
+and *reachable*, never a credential, host or connection string:
+
+```json
+{
+  "status": "ok",
+  "app": { "name": "qbo-cfo", "version": "1.0.0", "environment": "production",
+           "demoMode": false, "uptimeSeconds": 3821 },
+  "database": { "ok": true, "latencyMs": 3, "migrationsApplied": true, "error": null },
+  "scheduler": { "configured": true, "enabledCompanies": 1, "lastRunAt": "...",
+                 "lastRunStatus": "completed", "staleLocks": 0 },
+  "quickbooks": { "configured": true, "environment": "production",
+                  "clientIdPresent": true, "redirectUriConfigured": true },
+  "ai": { "configured": true, "model": "gpt-4.1",
+          "promptVersions": { "cfo": "cfo_system_prompt_v1.0", "chat": "cfo_chat_prompt_v1.0" } }
+}
+```
+
+It returns **`503`** when the database is unreachable, so an orchestrator can
+take the instance out of rotation, and always sets `Cache-Control: no-store`.
+
+Watch `scheduler.staleLocks`: a non-zero value that persists means a sync died
+holding a lock, and the next scheduled run for that company-month will be
+refused until the lock expires.
+
+Also useful:
+
 - `GET /login` returns 200 and reports a database problem in-page if the
   connection is down.
 - *Settings → QuickBooks* shows connection status, token expiry, refresh
@@ -158,6 +186,24 @@ Logs are structured JSON with secret redaction applied to every string:
 bearer tokens, OAuth tokens, client secrets and API keys are replaced before
 emission. Do not add `console.log` calls that bypass `src/lib/logger.ts`.
 
+The same redaction runs over every user-facing error message, so no provider
+payload or connection string can reach the screen even if one reaches an
+exception.
+
+### Events to alert on
+
+`src/lib/observability.ts` defines a typed event vocabulary. The ones worth an
+alert:
+
+| Event | Meaning |
+|---|---|
+| `qbo.token_refresh_failed` | The connection is dying. The owner must reconnect; nothing will sync until they do |
+| `sync.failed` | A month did not import. Figures for that month are missing, not wrong |
+| `sync.lock_contended` | Two syncs raced. Expected occasionally; persistent contention means a stuck lock |
+| `report.failed` | A scheduled month-end produced nothing |
+| `ai.injection_signal` | An accounting field contains instruction-like text. Not an incident by itself — it is treated as data — but worth a look at who created that record |
+| `qbo.rate_limited` | Backoff is working; frequent occurrences mean imports are too aggressive |
+
 ---
 
 ## Failure modes and responses
@@ -179,12 +225,27 @@ emission. Do not add `console.log` calls that bypass `src/lib/logger.ts`.
 ```bash
 git pull
 npm ci
-npm run db:migrate      # idempotent
+npm run db:migrate      # idempotent, and safe to run from two instances at once
 npm run build
 # restart the service
 ```
 
-Schema changes are additive; `db/schema.sql` is safe to re-apply.
+Schema changes are additive; `db/schema.sql` is safe to re-apply, and schema
+application is serialised behind an advisory lock so two instances booting
+simultaneously cannot deadlock on the system catalogs.
+
+Reports generated before the upgrade stay readable. Their stored payloads are
+normalised to the current shape on read, with fields that were not recorded
+shown as not recorded rather than backfilled with zeros. Regenerating a report
+is what produces current figures, and it appends a version rather than
+overwriting the one that was issued.
+
+After upgrading, confirm:
+
+```bash
+curl -s https://your-app.example.com/api/health | jq .status   # "ok"
+npm run reconcile -- --period <latest closed month>            # RESULT: PASS
+```
 
 ---
 
@@ -198,4 +259,9 @@ Schema changes are additive; `db/schema.sql` is safe to re-apply.
 - [ ] Only the `com.intuit.quickbooks.accounting` scope is granted
 - [ ] TLS terminates in front of the app and `X-Forwarded-For` is forwarded
 - [ ] Database backups are running and restore has been tested
+      (see [`BACKUP_RECOVERY.md`](BACKUP_RECOVERY.md))
+- [ ] [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md) has been read and its accepted
+      limitations are acceptable for this deployment
+- [ ] The full [`PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md) has been
+      worked through — this list is the security subset of it
 - [ ] `npm test` passes against the deployment's Node version

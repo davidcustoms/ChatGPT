@@ -4,7 +4,7 @@
 **Period:** July 2026 (2026-07-01 to 2026-07-31)
 **Basis:** Accrual
 **Source:** Demo data (synthetic)
-**Generated:** 2026-08-23T04:17:09.769Z
+**Generated:** 2026-08-23T04:29:47.539Z
 **Profit & Loss snapshot:** `ef0f3596-917c-420b-accc-6ee3d38669f6`
 **Balance Sheet snapshot:** `2cb2bf45-fb29-4310-b9a4-6807aa02fa58`
 

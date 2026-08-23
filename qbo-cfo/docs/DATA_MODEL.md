@@ -243,6 +243,59 @@ that chain directly, and the Expenses page renders it.
 
 ---
 
+## Versioning and locking
+
+These tables exist so a report issued last quarter can still be explained.
+
+### `account_mapping_versions`
+An immutable snapshot of the whole mapping, keyed by a content checksum so
+capturing an unchanged mapping is a no-op. `UNIQUE (company_id, version)` and
+`UNIQUE (company_id, checksum)`. Every report records the mapping version it was
+built from, so "why does this category total differ from last month" has an
+answer that is not guesswork.
+
+### `report_versions`
+Append-only. Each generation writes a new row carrying the full payload, the
+executive summary, the confidence and score, the accounting basis, the source
+snapshot ids, a SHA-256 **source fingerprint** over those snapshots' content,
+the mapping version, the AI prompt version and model, the app version, and who
+generated it. `generated_reports.current_version` points at the latest.
+
+Nothing here is ever updated in place. Regenerating a report appends a version;
+it does not rewrite history.
+
+### `sync_locks`
+`(company_id, lock_key)` with an owner token and an expiry. Acquisition is an
+`INSERT ... ON CONFLICT DO UPDATE WHERE expired`, so two schedulers racing on the
+same company-month cannot both win. Combined with `pg_advisory_xact_lock` for
+in-transaction critical sections.
+
+---
+
+## Staleness
+
+A report's `source_fingerprint` is a SHA-256 over the content hashes of the
+snapshots it was built from. Recomputing that fingerprint from the snapshots
+currently stored and comparing tells you whether QuickBooks data changed after
+the report was issued — which is exactly the banner the report page shows, with
+*Keep original* and *Regenerate*.
+
+The comparison covers both the source data and the mapping version, because a
+figure can move for either reason.
+
+---
+
+## Payload compatibility
+
+`generated_reports.payload` is JSONB written by whatever version of the
+application generated it. Fields added later are simply absent from older rows,
+so every read goes through `normalizeReportPayload`, which fills in the current
+shape without inventing a figure: an unrecorded quality score reads "Not
+scored", unrecorded coverage stays `null` and renders as unknown. Regenerating
+is what produces current figures.
+
+---
+
 ## Retention
 
 `report_schedules.retention_months` (default 36) controls pruning of raw

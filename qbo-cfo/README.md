@@ -212,6 +212,17 @@ npm run typecheck    # strict TypeScript, no emit
 npm test             # unit + integration tests
 ```
 
+### Verification harnesses
+
+Each writes its output to `docs/`, so the claim and the evidence stay together.
+
+```bash
+npm run validate:qbo    # read-only checks against a live QuickBooks company
+npm run reconcile       # every total against QuickBooks' own subtotals, to the cent
+npm run chat:qa         # 60 CFO chat questions -> docs/CFO_CHAT_QA.md
+npm run benchmark       # timings at 50k/100k/250k transactions -> docs/PERFORMANCE.md
+```
+
 ## Demo mode
 
 With `DEMO_MODE=true` you can explore the entire product without QuickBooks:
@@ -313,7 +324,22 @@ npx vitest run --config vitest.config.mts tests/metrics.test.ts
 | [`docs/FINANCIAL_METRICS.md`](docs/FINANCIAL_METRICS.md) | Every formula, including the divide-by-zero rules |
 | [`docs/AI_GUARDRAILS.md`](docs/AI_GUARDRAILS.md) | What the model may and may not do, and how it is enforced |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Production deployment and operations |
-| [`docs/BUILD_STATUS.md`](docs/BUILD_STATUS.md) | What is built, in progress, remaining, and known issues |
+| [`docs/PRODUCTION_CHECKLIST.md`](docs/PRODUCTION_CHECKLIST.md) | The gates to clear before a real company's month-end runs on this |
+| [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md) | Threat by threat, with the test that exercises each control |
+| [`docs/BACKUP_RECOVERY.md`](docs/BACKUP_RECOVERY.md) | What is at risk, backup schedule, restore procedure, recovery objectives |
+| [`docs/SANDBOX_VS_PRODUCTION.md`](docs/SANDBOX_VS_PRODUCTION.md) | How Intuit's sandbox differs from a real company, and how each difference is handled |
+| [`docs/RECONCILIATION.md`](docs/RECONCILIATION.md) | The latest reconciliation run, line by line |
+| [`docs/CFO_CHAT_QA.md`](docs/CFO_CHAT_QA.md) | 60 chat questions with the answers the application actually gave |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | Measured timings at 50k, 100k and 250k transactions |
+| [`docs/BUILD_STATUS.md`](docs/BUILD_STATUS.md) | Production-readiness gates, what is built, and known issues |
+
+## Production readiness
+
+**This build has never been run against a production QuickBooks company.**
+`docs/BUILD_STATUS.md` records which gates are met and which are not, and
+`docs/PRODUCTION_CHECKLIST.md` is the path from here to yes. Do not run a real
+company's month-end on it until the live validation and reconciliation gates
+pass.
 
 ---
 

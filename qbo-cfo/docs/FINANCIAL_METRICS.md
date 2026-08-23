@@ -275,16 +275,91 @@ the biggest problems appear first in "Needs Your Attention".
 
 ## Report confidence
 
-`High` / `Medium` / `Low`, derived from the close checks:
+Two things are reported, and they are not the same.
+
+### The 0-100 score
+
+Computed deterministically as a transparent deduction model. Every point lost is
+shown with the factor and the reason that removed it, so the score is actionable
+rather than a verdict.
+
+| Band | Score | Meaning |
+|---|---|---|
+| Excellent | 90-100 | Nothing material is wrong with the underlying bookkeeping |
+| Good | 75-89 | Usable; the deductions are worth reading |
+| Needs Review | 60-74 | Something should be fixed before relying on this |
+| Low Confidence | Below 60 | Do not make a decision on these figures without fixing the deductions |
+
+Ten factors can remove points, capped at the maximum shown:
+
+| Factor | Max | What removes points |
+|---|---:|---|
+| Report availability | 40 | A missing Profit & Loss |
+| Mapping coverage | 25 | Income and expense dollars not mapped to a management category |
+| Balance sheet integrity | 15 | Assets not equal to liabilities plus equity |
+| Period incomplete | 12 | The month is not closed |
+| Sync completeness | 10 | A sync that finished `partial` |
+| Uncategorised balances | 10 | Material suspense or uncategorised accounts |
+| Comparison periods | 10 | Missing prior month or prior year |
+| Dimension coverage | 8 | Store reporting requested with no location or class data |
+| Unresolved anomalies | 8 | Critical alerts still open |
+| Stale data | 8 | The last sync is old relative to the period |
+
+The maxima sum to more than 100 by design: a report can be wrong in several ways
+at once, and the score should reach the bottom band when it is.
+
+**With no Profit & Loss the score is capped at 20** regardless of what else is
+clean. Without an income statement there is no report, and a "Needs Review"
+badge on nothing would be misleading.
+
+A report stored before the score existed carries the band `unknown` and reads
+"Not scored". It is never backfilled with a zero, which would read as a verdict
+on the bookkeeping rather than a missing field.
+
+### The three-value confidence
+
+`High` / `Medium` / `Low`, derived from the close checks and kept for the stored
+`confidence` column and for older reports:
 
 - any failing check → **Low**
 - one or more warnings → **Medium**
 - everything passing → **High**
 
-Failing checks include a missing P&L, an unbalanced balance sheet, unmapped
-expenses above 10%, and missing location data when store reporting was
-requested. Warnings include an incomplete month, a company-name mismatch,
-material suspense balances, negative inventory and aged receivables or payables.
+The checklist is deliberately broader than the score. It surfaces everything
+worth an owner's attention — negative inventory, a company-name mismatch, aged
+receivables — while the score measures the ten named factors above. A warning on
+the checklist that is not a scored factor will not move the score, and that is
+intended: the checklist is for reading, the score is for comparing months.
 
-Confidence describes the **cleanliness of the bookkeeping**, not the accuracy of
-the arithmetic.
+Both describe the **cleanliness of the bookkeeping**, not the accuracy of the
+arithmetic. The AI layer may cite the score and cannot change it.
+
+---
+
+## Mapping coverage
+
+Coverage is **dollar-weighted**, not counted by accounts. Ten unmapped accounts
+holding $40 between them are not a problem; one unmapped account holding
+$40,000 is.
+
+| Coverage | Confidence | Effect |
+|---|---|---|
+| 95% or above | High | No caveat |
+| 85-95% | Medium | A caveat travels with the figure |
+| Below 85% | Low | The caveat is stated, and the AI layer is instructed not to draw conclusions about that category at all |
+
+Caveats are appended by the application after the model has worded an answer, so
+a caveat cannot be softened or dropped in narration.
+
+---
+
+## Reconciliation
+
+`npm run reconcile` compares every headline total against QuickBooks' own
+subtotal rows, read straight from the stored raw snapshot rather than through
+the application's classification logic — so agreement is a genuine check, not a
+restatement of the same computation.
+
+Tolerance is half a cent. A difference is a bug in the data transformation and
+must be fixed there; widening the tolerance is not a fix. The current run is in
+`docs/RECONCILIATION.md`.
