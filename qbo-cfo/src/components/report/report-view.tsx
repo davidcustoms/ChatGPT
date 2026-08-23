@@ -4,11 +4,28 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard, Delta } from '@/components/ui/metric';
 import { Table, TableWrap, TBody, TD, TH, THead, TR } from '@/components/ui/table';
 import { InfoNotice, WarningNotice } from '@/components/ui/states';
+import { BasisBadge } from '@/components/report/basis-badge';
+import { CoveragePanel } from '@/components/report/coverage-panel';
+import { MetricProvenance } from '@/components/report/metric-provenance';
+import { QualityScoreCard } from '@/components/report/quality-score';
 import { TrendChart } from '@/components/charts/trend-chart';
 import { CategoryBarChart } from '@/components/charts/category-bar-chart';
 import { SERIES } from '@/components/charts/palette';
 import { formatCurrency, formatDate, formatPercent, formatPoints } from '@/lib/util/format';
 import type { ReportPayload } from '@/lib/reports/types';
+
+/** Headline card key -> provenance metric key. */
+const HEADLINE_METRIC_KEYS: Record<string, string> = {
+  revenue: 'net_sales',
+  gross_profit: 'gross_profit',
+  gross_margin: 'gross_margin',
+  operating_expenses: 'operating_expenses',
+  net_income: 'net_income',
+  net_margin: 'net_margin',
+  cash: 'cash',
+  ar: 'accounts_receivable',
+  ap: 'accounts_payable',
+};
 
 /** Renders a completed report payload. Purely presentational — no computation. */
 export function ReportView({ payload }: { payload: ReportPayload }) {
@@ -31,6 +48,16 @@ export function ReportView({ payload }: { payload: ReportPayload }) {
               changePct={h.format === 'percent' ? undefined : h.changePct}
               changePoints={h.format === 'percent' ? h.changePoints : undefined}
               comparisonLabel={h.comparisonLabel}
+              footer={
+                HEADLINE_METRIC_KEYS[h.key] ? (
+                  <MetricProvenance
+                    companyId={payload.companyId}
+                    period={payload.period.start.slice(0, 7)}
+                    metricKey={HEADLINE_METRIC_KEYS[h.key] as string}
+                    currency={cur}
+                  />
+                ) : null
+              }
             />
           ))}
         </div>
@@ -361,6 +388,13 @@ export function ReportView({ payload }: { payload: ReportPayload }) {
         </div>
       </Section>
 
+      <Section id="data-quality" title="Data Quality">
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          <QualityScoreCard score={payload.dataQuality.score} />
+          <CoveragePanel coverage={payload.mappingCoverage} currency={cur} />
+        </div>
+      </Section>
+
       <Section id="risks" title="Risks &amp; Opportunities">
         {payload.insights.length === 0 ? (
           <p className="text-sm text-ink-muted">No material risks were identified for this period.</p>
@@ -421,21 +455,33 @@ export function ReportView({ payload }: { payload: ReportPayload }) {
 
 function ReportMeta({ payload }: { payload: ReportPayload }) {
   const confidenceVariant =
-    payload.dataQuality.confidence === 'high'
+    payload.dataQuality.score.band === 'excellent'
       ? 'positive'
-      : payload.dataQuality.confidence === 'medium'
-        ? 'warning'
-        : 'negative';
+      : payload.dataQuality.score.band === 'good'
+        ? 'info'
+        : payload.dataQuality.score.band === 'needs_review'
+          ? 'warning'
+          : 'negative';
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
           <CardTitle className="text-base">{payload.companyName}</CardTitle>
-          <Badge variant={confidenceVariant}>Report confidence: {payload.dataQuality.confidence}</Badge>
+          <BasisBadge
+            method={payload.accountingMethod}
+            label={payload.basisLabel}
+            description={payload.basisDescription}
+          />
+          <Badge variant={confidenceVariant}>
+            Report confidence: {payload.dataQuality.score.score}/100 · {payload.dataQuality.score.bandLabel}
+          </Badge>
         </div>
         <p className="text-xs text-ink-muted">
           Data through: {formatDate(payload.dataThrough)} · Source: {payload.sourceSystem} · Generated{' '}
           {formatDate(payload.generatedAt)}
+          {payload.provenanceVersion
+            ? ` · Version ${payload.provenanceVersion.reportVersion} · App ${payload.provenanceVersion.appVersion} · Prompt ${payload.provenanceVersion.aiPromptVersion} · Mapping v${payload.provenanceVersion.mappingVersion}`
+            : ''}
         </p>
       </CardHeader>
       {payload.dataQuality.reasons.length > 0 ? (

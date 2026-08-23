@@ -1,5 +1,6 @@
 import { AppError } from '../errors';
 import { logger } from '../logger';
+import { event } from '../observability';
 import { recordAudit } from '../db/repositories/audit';
 import { getCompany } from '../db/repositories/companies';
 import { markSynced } from '../db/repositories/connections';
@@ -42,6 +43,9 @@ import {
   fetchVendors,
 } from './entities';
 import { addMonths, monthPeriodOf, toIsoDate, type Period } from '../util/dates';
+import { normalizeMethod, type AccountingMethod } from '../finance/basis';
+import { captureMappingVersion } from '../db/repositories/mapping-versions';
+import { acquireLock, releaseLock } from '../db/repositories/locks';
 import type { QuickBooksClient } from './client';
 
 /**
@@ -134,10 +138,12 @@ export async function syncMonth(input: {
   realmId: string;
   period: Period;
   dimension: 'location' | 'class' | 'none';
+  accountingMethod?: AccountingMethod;
   jobId?: string | null;
   includeTransactions?: boolean;
 }): Promise<{ warnings: string[] }> {
   const { client, companyId, realmId, period, dimension } = input;
+  const accountingMethod = normalizeMethod(input.accountingMethod);
   const warnings: string[] = [];
   const snapshotIds: string[] = [];
 
@@ -145,13 +151,14 @@ export async function syncMonth(input: {
   const pnlRaw = await client.report<QboReport>('ProfitAndLoss', {
     start_date: period.start,
     end_date: period.end,
-    accounting_method: 'Accrual',
+    accounting_method: accountingMethod,
   });
   snapshotIds.push(
     await saveSnapshot({
       companyId,
       reportType: 'ProfitAndLoss',
       period,
+      accountingMethod,
       payload: pnlRaw,
       sourceRealmId: realmId,
       syncJobId: input.jobId ?? null,
@@ -168,13 +175,14 @@ export async function syncMonth(input: {
     const bsRaw = await client.report<QboReport>('BalanceSheet', {
       start_date: period.start,
       end_date: period.end,
-      accounting_method: 'Accrual',
+      accounting_method: accountingMethod,
     });
     snapshotIds.push(
       await saveSnapshot({
         companyId,
         reportType: 'BalanceSheet',
         period,
+        accountingMethod,
         payload: bsRaw,
         sourceRealmId: realmId,
         syncJobId: input.jobId ?? null,
@@ -243,7 +251,7 @@ export async function syncMonth(input: {
       const raw = await client.report<QboReport>('ProfitAndLoss', {
         start_date: period.start,
         end_date: period.end,
-        accounting_method: 'Accrual',
+        accounting_method: accountingMethod,
         summarize_column_by: SUMMARIZE_BY[dimension],
       });
       await saveSnapshot({
@@ -251,6 +259,7 @@ export async function syncMonth(input: {
         reportType: 'ProfitAndLoss',
         period,
         dimension,
+        accountingMethod,
         payload: raw,
         sourceRealmId: realmId,
         syncJobId: input.jobId ?? null,
@@ -277,7 +286,16 @@ export async function syncMonth(input: {
     }
   }
 
-  await recomputeMonth({ companyId, period, snapshotIds, pnlFlatOverride: pnlFlat, bsFlatOverride: bsFlat, dimensionFlatOverride: dimensionFlat, dimension });
+  await recomputeMonth({
+    companyId,
+    period,
+    snapshotIds,
+    pnlFlatOverride: pnlFlat,
+    bsFlatOverride: bsFlat,
+    dimensionFlatOverride: dimensionFlat,
+    dimension,
+    accountingMethod,
+  });
 
   return { warnings };
 }
@@ -294,8 +312,12 @@ export async function recomputeMonth(input: {
   bsFlatOverride?: ReturnType<typeof flattenReport> | null;
   dimensionFlatOverride?: ReturnType<typeof flattenReport> | null;
   dimension?: 'location' | 'class' | 'none';
+  accountingMethod?: AccountingMethod;
 }): Promise<void> {
   const { companyId, period } = input;
+  const accountingMethod = normalizeMethod(
+    input.accountingMethod ?? (await getCompany(companyId))?.accountingMethod,
+  );
   const accounts = await accountIndex(companyId);
   const mapping = await effectiveMappingIndex(companyId);
 
@@ -303,15 +325,18 @@ export async function recomputeMonth(input: {
   let bsFlat = input.bsFlatOverride ?? null;
   if (!pnlFlat) {
     const { getSnapshot } = await import('../db/repositories/snapshots');
-    const snap = await getSnapshot<QboReport>(companyId, 'ProfitAndLoss', period);
+    const snap = await getSnapshot<QboReport>(companyId, 'ProfitAndLoss', period, 'total', accountingMethod);
     if (!snap) {
-      throw new AppError('QBO_EMPTY_PERIOD', `No Profit & Loss snapshot stored for ${period.start.slice(0, 7)}.`);
+      throw new AppError(
+        'QBO_EMPTY_PERIOD',
+        `No ${accountingMethod.toLowerCase()}-basis Profit & Loss snapshot stored for ${period.start.slice(0, 7)}.`,
+      );
     }
     pnlFlat = flattenReport(snap.payload);
   }
   if (!bsFlat) {
     const { getSnapshot } = await import('../db/repositories/snapshots');
-    const snap = await getSnapshot<QboReport>(companyId, 'BalanceSheet', period);
+    const snap = await getSnapshot<QboReport>(companyId, 'BalanceSheet', period, 'total', accountingMethod);
     bsFlat = snap ? flattenReport(snap.payload) : null;
   }
 
@@ -321,6 +346,7 @@ export async function recomputeMonth(input: {
   const { metrics, accountAmounts } = computeMonthlyMetrics({
     companyId,
     period,
+    accountingMethod,
     pnl,
     balanceSheet,
     mapping,
@@ -340,7 +366,9 @@ export async function recomputeMonth(input: {
     let flat = input.dimensionFlatOverride ?? null;
     if (!flat) {
       const { getSnapshot } = await import('../db/repositories/snapshots');
-      const snap = await getSnapshot<QboReport>(companyId, 'ProfitAndLoss', period, dimension);
+      const snap = await getSnapshot<QboReport>(
+        companyId, 'ProfitAndLoss', period, dimension, accountingMethod,
+      );
       flat = snap ? flattenReport(snap.payload) : null;
     }
     if (flat) {
@@ -354,7 +382,7 @@ export async function recomputeMonth(input: {
         period,
         displayNames,
       });
-      await saveLocationMetrics(companyId, period, rows);
+      await saveLocationMetrics(companyId, period, rows, accountingMethod);
     }
   }
 }
@@ -373,6 +401,17 @@ export async function importHistory(
   const end = options.endPeriod ?? monthPeriodOf(toIsoDate(new Date()));
   const lastClosed = addMonths(end, -1);
 
+  // One import at a time per company. A second request while an import is
+  // running would double the QuickBooks API cost and interleave partial data.
+  const locked = await acquireImportLock(options.companyId);
+  if (!locked) {
+    event('sync.lock_contended', { companyId: options.companyId, reason: 'historical import already running' });
+    throw new AppError(
+      'VALIDATION',
+      'A sync is already running for this company. Wait for it to finish before starting another.',
+    );
+  }
+
   const jobId = await createJob({
     companyId: options.companyId,
     jobType: 'historical_import',
@@ -383,6 +422,8 @@ export async function importHistory(
   });
 
   const warnings: string[] = [];
+  const startedAt = Date.now();
+  event('sync.started', { companyId: options.companyId, jobId, count: months, status: 'historical_import' });
   try {
     const { client, connection } = await clientForCompany(options.companyId);
 
@@ -406,6 +447,7 @@ export async function importHistory(
           realmId: connection.realmId,
           period,
           dimension,
+          accountingMethod: company.accountingMethod,
           jobId,
         });
         warnings.push(...result.warnings);
@@ -424,7 +466,22 @@ export async function importHistory(
     }
 
     await markSynced(connection.id);
+    // Mappings may have been seeded during this import; capture the resulting
+    // set as a version so reports generated from it are reproducible.
+    await captureMappingVersion({
+      companyId: options.companyId,
+      changeNote: 'Captured after historical import',
+      createdBy: options.requestedBy ?? null,
+    }).catch(() => undefined);
+
     const status = warnings.length > 0 ? 'partial' : 'completed';
+    event('sync.finished', {
+      companyId: options.companyId,
+      jobId,
+      status,
+      count: warnings.length,
+      durationMs: Date.now() - startedAt,
+    });
     await finishJob(jobId, status, warnings.length ? warnings.slice(0, 20).join('\n') : null);
     await recordAudit({
       companyId: options.companyId,
@@ -438,6 +495,7 @@ export async function importHistory(
     return { jobId, warnings };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Historical import failed';
+    event('sync.failed', { companyId: options.companyId, jobId, reason: message });
     await finishJob(jobId, 'failed', message);
     await recordAudit({
       companyId: options.companyId,
@@ -449,6 +507,8 @@ export async function importHistory(
       metadata: { message },
     });
     throw err;
+  } finally {
+    await releaseImportLock(options.companyId).catch(() => undefined);
   }
 }
 
@@ -460,6 +520,16 @@ export async function syncSingleMonth(
   if (!company) throw new AppError('NOT_FOUND', 'Company not found.');
   if (company.isDemo) {
     throw new AppError('VALIDATION', 'The demo company uses synthetic data and cannot sync QuickBooks.');
+  }
+
+  const lockKey = `sync:${options.period.start}`;
+  const lock = await acquireLock(options.companyId, lockKey);
+  if (!lock) {
+    event('sync.lock_contended', { companyId: options.companyId, period: options.period.start });
+    throw new AppError(
+      'VALIDATION',
+      `A sync for ${options.period.start.slice(0, 7)} is already running. Wait for it to finish.`,
+    );
   }
 
   const jobId = await createJob({
@@ -482,6 +552,7 @@ export async function syncSingleMonth(
       realmId: connection.realmId,
       period: options.period,
       dimension,
+      accountingMethod: company.accountingMethod,
       jobId,
     });
     await markSynced(connection.id);
@@ -499,5 +570,30 @@ export async function syncSingleMonth(
     const message = err instanceof Error ? err.message : 'Sync failed';
     await finishJob(jobId, 'failed', message);
     throw err;
+  } finally {
+    await releaseLock(lock).catch(() => undefined);
   }
+}
+
+// --------------------------------------------------------------------------
+// Import locking helpers
+// --------------------------------------------------------------------------
+
+const IMPORT_LOCK_KEY = 'import:all';
+const IMPORT_LOCK_TTL_SECONDS = 3600;
+
+const heldImportLocks = new Map<string, Awaited<ReturnType<typeof acquireLock>>>();
+
+async function acquireImportLock(companyId: string): Promise<boolean> {
+  const lock = await acquireLock(companyId, IMPORT_LOCK_KEY, IMPORT_LOCK_TTL_SECONDS);
+  if (!lock) return false;
+  heldImportLocks.set(companyId, lock);
+  return true;
+}
+
+async function releaseImportLock(companyId: string): Promise<void> {
+  const lock = heldImportLocks.get(companyId);
+  if (!lock) return;
+  heldImportLocks.delete(companyId);
+  await releaseLock(lock);
 }

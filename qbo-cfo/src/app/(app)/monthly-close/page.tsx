@@ -9,6 +9,12 @@ import { duplicateCandidates, missingDimensionCount } from '@/lib/db/repositorie
 import { listJobs } from '@/lib/db/repositories/jobs';
 import { evaluateDataQuality } from '@/lib/finance/data-quality';
 import { isUncategorizedAccount } from '@/lib/finance/transaction-review';
+import { basisDescription, basisLabel } from '@/lib/finance/basis';
+import { computeMappingCoverage } from '@/lib/finance/coverage';
+import { accountIndex } from '@/lib/db/repositories/masterdata';
+import { effectiveMappingIndex } from '@/lib/db/repositories/mappings';
+import { latestSnapshotFetchedAt } from '@/lib/db/repositories/snapshots';
+import { getAnomalies } from '@/lib/db/repositories/anomalies';
 import { monthLabel } from '@/lib/util/dates';
 import { formatCurrency, formatDateTime } from '@/lib/util/format';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +22,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableWrap, TBody, TD, TH, THead, TR } from '@/components/ui/table';
 import { PageHeader, DataProvenance } from '@/components/layout/page-header';
+import { BasisBadge } from '@/components/report/basis-badge';
+import { CoveragePanel } from '@/components/report/coverage-panel';
+import { QualityScoreCard } from '@/components/report/quality-score';
 import { PeriodPicker } from '@/components/layout/period-picker';
 import { NoDataState } from '@/components/layout/no-data';
 
@@ -64,6 +73,25 @@ export default async function MonthlyClosePage({ searchParams }: { searchParams:
     duplicateCandidates(company.id, period, company.materialityAmount),
   ]);
 
+  const [accounts, mapping, lastFetchedAt, anomalies] = await Promise.all([
+    accountIndex(company.id),
+    effectiveMappingIndex(company.id),
+    latestSnapshotFetchedAt(company.id),
+    getAnomalies(company.id, period),
+  ]);
+
+  const coverage = computeMappingCoverage({
+    accountAmounts: accountRows.map((r) => ({
+      accountQboId: r.accountQboId,
+      accountName: r.accountName,
+      classification: r.classification,
+      categoryKey: r.categoryKey,
+      amount: r.amount,
+    })),
+    accounts,
+    mapping,
+  });
+
   const quality = evaluateDataQuality({
     period,
     metrics,
@@ -81,16 +109,54 @@ export default async function MonthlyClosePage({ searchParams }: { searchParams:
     unreconciledNote: company.isDemo
       ? null
       : 'QuickBooks does not expose bank-reconciliation status through its API. Confirm reconciliations directly in QuickBooks before treating this month as closed.',
+    scoring: {
+      hasProfitAndLoss: Boolean(metrics && (metrics.netSales !== 0 || metrics.operatingExpenses !== 0)),
+      hasBalanceSheet: metrics?.balanceSheetBalanced !== null && metrics?.balanceSheetBalanced !== undefined,
+      hasReceivableAging: arAging !== null,
+      hasPayableAging: apAging !== null,
+      balanceSheetBalanced: metrics?.balanceSheetBalanced ?? null,
+      mappingCoverage: coverage.overallCoverage,
+      unmappedAmount: coverage.totalUnmappedAmount,
+      unmappedAccountCount: coverage.totalUnmappedAccounts,
+      uncategorizedShareOfOpex:
+        metrics && metrics.operatingExpenses > 0
+          ? uncategorizedBalances.reduce((a, b) => a + Math.abs(b.amount), 0) / metrics.operatingExpenses
+          : 0,
+      uncategorizedAmount: uncategorizedBalances.reduce((a, b) => a + Math.abs(b.amount), 0),
+      missingDimensionShare:
+        dimensionCoverage.total > 0 ? dimensionCoverage.missing / dimensionCoverage.total : null,
+      dimensionReportingActive: stores.length > 0 || company.trackingDimension === 'location',
+      lastSyncStatus:
+        jobs[0] === undefined
+          ? 'none'
+          : jobs[0].status === 'failed'
+            ? 'failed'
+            : jobs[0].status === 'partial'
+              ? 'partial'
+              : 'completed',
+      syncWarningCount: jobs[0]?.errorMessage ? jobs[0].errorMessage.split('\n').length : 0,
+      criticalAnomalies: anomalies.filter((a) => a.severity === 'CRITICAL').length,
+      importantAnomalies: anomalies.filter((a) => a.severity === 'IMPORTANT').length,
+      daysSinceLastSync: lastFetchedAt
+        ? (Date.now() - new Date(lastFetchedAt).getTime()) / 86_400_000
+        : null,
+    },
   });
-
-  const confidenceVariant =
-    quality.confidence === 'high' ? 'positive' : quality.confidence === 'medium' ? 'warning' : 'negative';
 
   return (
     <>
       <PageHeader
         title={`Monthly close — ${monthLabel(period)}`}
-        description={<DataProvenance dataThrough={ctx.dataThrough} source={ctx.sourceLabel} />}
+        description={
+          <div className="flex flex-wrap items-center gap-2">
+            <DataProvenance dataThrough={ctx.dataThrough} source={ctx.sourceLabel} />
+            <BasisBadge
+              method={company.accountingMethod}
+              label={basisLabel(company.accountingMethod)}
+              description={basisDescription(company.accountingMethod)}
+            />
+          </div>
+        }
         actions={
           <>
             <PeriodPicker periods={ctx.availablePeriods} active={period.start.slice(0, 7)} />
@@ -103,22 +169,10 @@ export default async function MonthlyClosePage({ searchParams }: { searchParams:
         }
       />
 
-      <Card className="mb-4">
-        <CardContent className="flex flex-wrap items-center justify-between gap-4 py-4">
-          <div>
-            <p className="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">Report confidence</p>
-            <p className="mt-1 text-2xl font-semibold text-navy-800">
-              <Badge variant={confidenceVariant} className="px-3 py-1 text-sm">
-                {quality.confidence.toUpperCase()}
-              </Badge>
-            </p>
-          </div>
-          <p className="max-w-xl text-xs text-ink-muted">
-            Confidence reflects the cleanliness of the underlying bookkeeping, not the accuracy of the
-            calculations. A blocking check means a report generated now would be incomplete.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="mb-4 grid items-start gap-4 lg:grid-cols-2">
+        <QualityScoreCard score={quality.score} />
+        <CoveragePanel coverage={coverage} currency={company.currencyCode} />
+      </div>
 
       <div className="grid items-start gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">

@@ -11,6 +11,10 @@ import type {
   MonthlyMetrics,
 } from '../finance/types';
 import type { Period } from '../util/dates';
+import type { AccountingMethod } from '../finance/basis';
+import type { MappingCoverageReport } from '../finance/coverage';
+import type { QualityScore } from '../finance/quality-score';
+import type { MetricProvenance } from './provenance';
 
 export interface HeadlineMetric {
   key: string;
@@ -79,6 +83,23 @@ export interface ReportPayload {
   dataThrough: string;
   sourceSystem: string;
 
+  /** Reporting basis. Displayed on every surface; never mixed within a report. */
+  accountingMethod: AccountingMethod;
+  basisLabel: string;
+  basisDescription: string;
+
+  /** Recorded at generation time so any historical output can be reproduced. */
+  provenanceVersion: {
+    reportVersion: number;
+    appVersion: string;
+    aiPromptVersion: string;
+    aiModel: string | null;
+    mappingVersion: number | null;
+    mappingVersionId: string | null;
+    sourceFingerprint: string;
+    sourceSnapshotIds: string[];
+  } | null;
+
   metrics: MonthlyMetrics;
   comparisons: ComparisonSet;
   kpis: KpiSet;
@@ -108,8 +129,25 @@ export interface ReportPayload {
   observations: string[];
   executiveSummary: string | null;
 
+  /** Dollar-weighted mapping coverage, and per-category analysis confidence. */
+  mappingCoverage: MappingCoverageReport;
+
+  /** How every headline figure was produced. */
+  provenance: Record<string, MetricProvenance>;
+
+  /** Which comparison windows actually have data behind them. */
+  comparisonAvailability: {
+    priorMonth: boolean;
+    sameMonthLastYear: boolean;
+    yearToDate: boolean;
+    priorYearToDate: boolean;
+    trailingMonths: number;
+  };
+
   dataQuality: {
     checks: QualityCheck[];
+    /** Deterministic 0-100 score. The AI layer may cite it but never change it. */
+    score: QualityScore;
     confidence: 'high' | 'medium' | 'low';
     reasons: string[];
   };

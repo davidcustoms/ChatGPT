@@ -185,6 +185,7 @@ export async function saveInsights(
   period: Period,
   insights: AiInsight[],
   model: string,
+  promptVersion = 'none',
 ): Promise<void> {
   await withTransaction(async (client) => {
     await client.query('DELETE FROM ai_insights WHERE report_id = $1', [reportId]);
@@ -193,12 +194,13 @@ export async function saveInsights(
       await client.query(
         `INSERT INTO ai_insights
            (company_id, report_id, period_start, category, severity, observation,
-            supporting_metrics, likely_implication, recommended_action, confidence, model, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            supporting_metrics, likely_implication, recommended_action, confidence, model,
+            sort_order, prompt_version)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
           companyId, reportId, period.start, i.category, i.severity, i.observation,
           JSON.stringify(i.supportingMetrics), i.likelyImplication, i.recommendedAction,
-          i.confidence, model, order,
+          i.confidence, model, order, promptVersion,
         ],
       );
       order += 1;

@@ -55,7 +55,15 @@ export async function renderReportWorkbook(payload: ReportPayload): Promise<Buff
     summary.addRow([payload.companyName]).font = { bold: true, size: 16, color: { argb: NAVY } };
     summary.addRow([`${payload.periodLabel} Executive Financial Report`]).font = { size: 12 };
     summary.addRow([`Data through ${payload.dataThrough} · Source: ${payload.sourceSystem}`]);
-    summary.addRow([`Report confidence: ${payload.dataQuality.confidence.toUpperCase()}`]);
+    summary.addRow([`Reporting basis: ${payload.basisLabel}`]).font = { bold: true };
+    summary.addRow([
+      `Report confidence: ${payload.dataQuality.score.score}/100 (${payload.dataQuality.score.bandLabel})`,
+    ]);
+    if (payload.provenanceVersion) {
+      summary.addRow([
+        `Report version ${payload.provenanceVersion.reportVersion} · App ${payload.provenanceVersion.appVersion} · Prompt ${payload.provenanceVersion.aiPromptVersion} · Mapping v${payload.provenanceVersion.mappingVersion}`,
+      ]);
+    }
     summary.addRow([]);
     addTable(
       summary,
@@ -236,6 +244,49 @@ export async function renderReportWorkbook(payload: ReportPayload): Promise<Buff
       raw.addRow([k, v as number | null]);
     }
 
+    // --- Data quality --------------------------------------------------------
+    const quality = wb.addWorksheet('Data Quality');
+    quality.addRow(['Report confidence']).font = { bold: true, color: { argb: NAVY } };
+    quality.addRow(['Score', payload.dataQuality.score.score]);
+    quality.addRow(['Band', payload.dataQuality.score.bandLabel]);
+    quality.addRow(['Basis', payload.basisLabel]);
+    quality.addRow([]);
+    addTable(
+      quality,
+      ['Factor', 'Points deducted', 'Reason'],
+      payload.dataQuality.score.deductions.map((d) => [d.label, -d.points, d.reason]),
+    );
+    quality.addRow([]);
+    quality.addRow(['Mapping coverage']).font = { bold: true, color: { argb: NAVY } };
+    addTable(
+      quality,
+      ['Section', 'Mapped', 'Unmapped', 'Accounts unmapped', 'Coverage'],
+      payload.mappingCoverage.sections.map((sec) => [
+        sec.label,
+        sec.mappedAmount,
+        sec.unmappedAmount,
+        sec.unmappedAccountCount,
+        sec.coverage,
+      ]),
+      { 2: MONEY, 3: MONEY, 5: PERCENT },
+    );
+    quality.addRow([]);
+    quality.addRow(['Category', 'Coverage', 'Confidence', 'Caveat']).font = { bold: true };
+    for (const c of payload.mappingCoverage.byCategory) {
+      const row = quality.addRow([c.label, c.coverage, c.confidence, c.caveat ?? '']);
+      row.getCell(2).numFmt = PERCENT;
+    }
+    quality.getColumn(3).width = 60;
+
+    // --- Checks --------------------------------------------------------------
+    const checks = wb.addWorksheet('Close Checks');
+    addTable(
+      checks,
+      ['Status', 'Check', 'Message'],
+      payload.dataQuality.checks.map((c) => [c.status, c.label, c.message]),
+    );
+    checks.getColumn(3).width = 90;
+
     // --- Anomalies ----------------------------------------------------------
     const anomalies = wb.addWorksheet('Anomalies');
     addTable(
@@ -247,6 +298,18 @@ export async function renderReportWorkbook(payload: ReportPayload): Promise<Buff
       { 5: MONEY, 6: MONEY, 7: MONEY, 8: PERCENT },
     );
     anomalies.getColumn(4).width = 70;
+
+    // Every sheet states its basis, so a sheet copied out of the workbook
+    // cannot be misread as the other basis.
+    for (const sheet of wb.worksheets) {
+      if (sheet.name === 'Executive Summary') continue;
+      const note = sheet.addRow([]);
+      void note;
+      sheet.addRow([`Reporting basis: ${payload.basisLabel} · Period: ${payload.periodLabel} · Source: ${payload.sourceSystem}`]).font = {
+        italic: true,
+        size: 9,
+      };
+    }
 
     const buffer = await wb.xlsx.writeBuffer();
     return Buffer.from(buffer);

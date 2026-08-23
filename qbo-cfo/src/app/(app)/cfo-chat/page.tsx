@@ -3,6 +3,8 @@ import { env, isOpenAiConfigured } from '@/lib/env';
 import { PageHeader, DataProvenance } from '@/components/layout/page-header';
 import { NoDataState } from '@/components/layout/no-data';
 import { InfoNotice } from '@/components/ui/states';
+import { BasisBadge } from '@/components/report/basis-badge';
+import { basisDescription, basisLabel } from '@/lib/finance/basis';
 import { ChatPanel } from './chat-panel';
 
 export const dynamic = 'force-dynamic';
@@ -41,7 +43,16 @@ export default async function CfoChatPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Ask Your CFO"
-        description={<DataProvenance dataThrough={ctx.dataThrough} source={ctx.sourceLabel} />}
+        description={
+          <div className="flex flex-wrap items-center gap-2">
+            <DataProvenance dataThrough={ctx.dataThrough} source={ctx.sourceLabel} />
+            <BasisBadge
+              method={ctx.company.accountingMethod}
+              label={basisLabel(ctx.company.accountingMethod)}
+              description={basisDescription(ctx.company.accountingMethod)}
+            />
+          </div>
+        }
       />
       {!isOpenAiConfigured() ? (
         <InfoNotice className="mb-4">
@@ -54,6 +65,7 @@ export default async function CfoChatPage({ searchParams }: { searchParams: Prom
         suggestions={SUGGESTIONS}
         dataThrough={ctx.dataThrough}
         source={ctx.sourceLabel}
+        basis={basisLabel(ctx.company.accountingMethod)}
       />
     </>
   );

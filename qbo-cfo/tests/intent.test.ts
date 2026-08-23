@@ -73,3 +73,28 @@ describe('period hint resolution', () => {
     expect(resolvePeriodHint('????-03', available)).toBeNull();
   });
 });
+
+describe('metrics the application does not compute', () => {
+  it('does not answer a named metric it has no data for', () => {
+    // Each of these mentions a period, which used to be enough to trigger a
+    // month summary — a confident answer to a question nobody asked.
+    expect(intentOf('What was our EBITDA in April 2026?')).toBe('unknown');
+    expect(intentOf('What is our customer lifetime value for July 2026?')).toBe('unknown');
+    expect(intentOf('What was CAC last month?')).toBe('unknown');
+    expect(intentOf('What is our MRR?')).toBe('unknown');
+    expect(intentOf('How long is our runway?')).toBe('unknown');
+    expect(intentOf('What was our churn rate in June 2026?')).toBe('unknown');
+  });
+
+  it('still summarises a month when the question is about something we track', () => {
+    expect(intentOf('How did 2026-07 look?')).toBe('month_summary');
+    expect(intentOf('Summarise July 2026.')).toBe('month_summary');
+    expect(intentOf('What was revenue in July 2026?')).toBe('month_summary');
+    expect(intentOf('Give me an overview of August.')).toBe('month_summary');
+  });
+
+  it('treats a bare date with no financial subject as unknown', () => {
+    expect(intentOf('What happened on 2026-07?')).toBe('unknown');
+    expect(intentOf('Who was on shift in July 2026?')).toBe('unknown');
+  });
+});

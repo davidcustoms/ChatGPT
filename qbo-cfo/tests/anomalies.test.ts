@@ -8,6 +8,7 @@ function metrics(overrides: Partial<MonthlyMetrics> = {}): MonthlyMetrics {
   return {
     companyId: 'c',
     period: monthPeriod(2026, 8),
+    accountingMethod: 'Accrual' as const,
     grossSales: 500_000,
     discounts: 0,
     refunds: 0,

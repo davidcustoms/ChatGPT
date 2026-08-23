@@ -10,6 +10,7 @@ function metrics(overrides: Partial<MonthlyMetrics> = {}): MonthlyMetrics {
   return {
     companyId: 'c',
     period,
+    accountingMethod: 'Accrual' as const,
     grossSales: 500_000, discounts: 0, refunds: 0, netSales: 500_000,
     cogs: 275_000, grossProfit: 225_000, grossMargin: 0.45,
     operatingExpenses: 150_000, payrollExpense: 0, advertisingExpense: 0, rentExpense: 0,
@@ -51,24 +52,65 @@ const check = (report: ReturnType<typeof evaluateDataQuality>, key: string) =>
   report.checks.find((c) => c.key === key);
 
 describe('report confidence', () => {
-  it('is high when every check passes', () => {
+  it('scores a clean period at the top band', () => {
     const report = evaluateDataQuality(input());
+    expect(report.score.score).toBe(100);
+    expect(report.score.bandLabel).toBe('Excellent');
     expect(report.confidence).toBe('high');
     expect(report.blocking).toBe(false);
     expect(report.reasons).toHaveLength(0);
   });
 
-  it('is low when any check fails', () => {
+  it('collapses to the low band when the Profit & Loss is missing', () => {
     const report = evaluateDataQuality(input({ metrics: null }));
+    expect(report.score.score).toBeLessThan(60);
+    expect(report.score.bandLabel).toBe('Low Confidence');
     expect(report.confidence).toBe('low');
     expect(report.blocking).toBe(true);
     expect(check(report, 'pnl_present')?.status).toBe('fail');
   });
 
-  it('drops to medium on warnings alone', () => {
+  it('surfaces a warning in the checklist without moving the score when it is not a scored factor', () => {
+    // The score measures the eight named factors. Negative inventory is a real
+    // bookkeeping signal and appears as a checklist warning, but it does not
+    // make the period's figures less reliable, so it does not deduct.
     const report = evaluateDataQuality(input({ negativeInventoryItems: ['Recliner - Leather'] }));
-    expect(report.confidence).toBe('medium');
-    expect(report.blocking).toBe(false);
+    expect(check(report, 'negative_inventory')?.status).toBe('warn');
+    expect(report.reasons.length).toBeGreaterThan(0);
+    expect(report.score.score).toBe(100);
+  });
+
+  it('deducts for unmapped expenses and reports why', () => {
+    const report = evaluateDataQuality(
+      input({
+        metrics: metrics({ unmappedOpexAmount: 19_200, unmappedOpexPct: 0.128 }),
+        unmappedExpenseAccountCount: 3,
+      }),
+    );
+    expect(report.score.score).toBeLessThan(90);
+    const deduction = report.score.deductions.find((d) => d.factor === 'mappingCoverage');
+    expect(deduction).toBeDefined();
+    expect(deduction?.reason).toMatch(/12\.8% of income and expense activity is not mapped/);
+  });
+
+  it('accepts richer scoring inputs from the report builder', () => {
+    const report = evaluateDataQuality(
+      input({
+        scoring: {
+          hasPriorMonth: false,
+          hasSameMonthLastYear: false,
+          trailingMonthsAvailable: 2,
+          daysSinceLastSync: 60,
+          lastSyncStatus: 'partial',
+          syncWarningCount: 3,
+        },
+      }),
+    );
+    const factors = report.score.deductions.map((d) => d.factor);
+    expect(factors).toContain('comparisonPeriods');
+    expect(factors).toContain('staleData');
+    expect(factors).toContain('syncCompleteness');
+    expect(report.score.score).toBeLessThan(85);
   });
 });
 

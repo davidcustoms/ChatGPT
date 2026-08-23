@@ -2,6 +2,7 @@ import { formatCurrency, formatPercent } from '../util/format';
 import { safeDivide } from './math';
 import type { MonthlyMetrics } from './types';
 import { isPeriodIncomplete, type Period } from '../util/dates';
+import { computeQualityScore, type QualityScore, type ScoreInput } from './quality-score';
 
 /**
  * Pre-report validation and the "Report Confidence" score shown on the monthly
@@ -22,6 +23,9 @@ export interface QualityCheck {
 
 export interface QualityReport {
   checks: QualityCheck[];
+  /** Deterministic 0-100 score. The AI layer may reference it but never change it. */
+  score: QualityScore;
+  /** Coarse three-value view of the score, kept for storage and legacy callers. */
   confidence: 'high' | 'medium' | 'low';
   reasons: string[];
   blocking: boolean;
@@ -43,6 +47,8 @@ export interface QualityInput {
   oldReceivables90Plus: number | null;
   oldPayables90Plus: number | null;
   today?: Date;
+  /** Scoring inputs. Supplied by the report builder; defaults keep older callers working. */
+  scoring?: Partial<ScoreInput>;
 }
 
 export function evaluateDataQuality(input: QualityInput): QualityReport {
@@ -210,12 +216,42 @@ export function evaluateDataQuality(input: QualityInput): QualityReport {
 
   const failures = checks.filter((c) => c.status === 'fail');
   const warnings = checks.filter((c) => c.status === 'warn');
-  const confidence: QualityReport['confidence'] =
-    failures.length > 0 ? 'low' : warnings.length >= 3 ? 'medium' : warnings.length > 0 ? 'medium' : 'high';
+
+  const uncategorizedTotalAmount = input.uncategorizedBalances.reduce((a, b) => a + Math.abs(b.amount), 0);
+  const score = computeQualityScore({
+    hasProfitAndLoss: Boolean(m && (m.netSales !== 0 || m.operatingExpenses !== 0)),
+    hasBalanceSheet: m?.balanceSheetBalanced !== null && m?.balanceSheetBalanced !== undefined,
+    hasReceivableAging: input.oldReceivables90Plus !== null,
+    hasPayableAging: input.oldPayables90Plus !== null,
+    balanceSheetBalanced: m?.balanceSheetBalanced ?? null,
+    mappingCoverage: m ? 1 - m.unmappedOpexPct : null,
+    unmappedAmount: m?.unmappedOpexAmount ?? 0,
+    unmappedAccountCount: input.unmappedExpenseAccountCount,
+    uncategorizedShareOfOpex:
+      m && m.operatingExpenses > 0 ? uncategorizedTotalAmount / m.operatingExpenses : 0,
+    uncategorizedAmount: uncategorizedTotalAmount,
+    missingDimensionShare:
+      input.missingDimension && input.missingDimension.total > 0
+        ? input.missingDimension.missing / input.missingDimension.total
+        : null,
+    dimensionReportingActive: input.requireLocationData,
+    lastSyncStatus: 'completed',
+    syncWarningCount: 0,
+    hasPriorMonth: true,
+    hasSameMonthLastYear: true,
+    trailingMonthsAvailable: 12,
+    criticalAnomalies: 0,
+    importantAnomalies: 0,
+    daysSinceLastSync: null,
+    periodIsIncomplete: incomplete,
+    // The report builder supplies richer values; anything it passes wins.
+    ...input.scoring,
+  });
 
   return {
     checks,
-    confidence,
+    score,
+    confidence: score.confidence,
     reasons: [...failures, ...warnings].map((c) => c.message),
     blocking: checks.some((c) => c.key === 'pnl_present' && c.status === 'fail'),
   };

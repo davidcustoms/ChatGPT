@@ -654,3 +654,144 @@ CREATE TABLE IF NOT EXISTS auth_failures (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS auth_failures_idx ON auth_failures(email, created_at DESC);
+
+-- ===========================================================================
+-- Production hardening additions
+--
+-- Everything below is additive and idempotent, so re-applying the schema on an
+-- existing database is safe.
+-- ===========================================================================
+
+-- --------------------------------------------------------------------------
+-- Reporting basis
+--
+-- Accrual and cash basis produce different numbers from the same ledger. The
+-- basis is stored on the company, carried on every snapshot, recorded on every
+-- report version, and displayed everywhere a figure is shown. Metrics are only
+-- ever computed from snapshots matching the company's current basis, so the
+-- two bases can never be mixed inside one report.
+-- --------------------------------------------------------------------------
+ALTER TABLE companies
+  ADD COLUMN IF NOT EXISTS accounting_method TEXT NOT NULL DEFAULT 'Accrual'
+    CHECK (accounting_method IN ('Accrual', 'Cash'));
+
+ALTER TABLE monthly_metrics
+  ADD COLUMN IF NOT EXISTS accounting_method TEXT NOT NULL DEFAULT 'Accrual';
+
+ALTER TABLE monthly_location_metrics
+  ADD COLUMN IF NOT EXISTS accounting_method TEXT NOT NULL DEFAULT 'Accrual';
+
+-- --------------------------------------------------------------------------
+-- Account mapping versions
+--
+-- A mapping change alters every derived figure. Each change writes an
+-- immutable version containing the complete mapping set, and every report
+-- records which version it was built from, so changing a mapping today can
+-- never silently rewrite what last quarter's report said.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS account_mapping_versions (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id   UUID        NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  version      INTEGER     NOT NULL,
+  -- Complete account_qbo_id -> category_key set at the moment of the change.
+  mappings     JSONB       NOT NULL,
+  -- SHA-256 of the canonical mapping set; identical mappings reuse a version.
+  checksum     TEXT        NOT NULL,
+  mapped_count INTEGER     NOT NULL DEFAULT 0,
+  change_note  TEXT,
+  created_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (company_id, version),
+  UNIQUE (company_id, checksum)
+);
+CREATE INDEX IF NOT EXISTS mapping_versions_company_idx
+  ON account_mapping_versions(company_id, version DESC);
+
+-- --------------------------------------------------------------------------
+-- Report versions
+--
+-- Regenerating a month never overwrites history. Each generation appends an
+-- immutable version recording exactly what produced it: the snapshots, the
+-- mapping version, the AI prompt version, the application version, the basis
+-- and the user.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS report_versions (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  report_id           UUID        NOT NULL REFERENCES generated_reports(id) ON DELETE CASCADE,
+  company_id          UUID        NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  version             INTEGER     NOT NULL,
+  period_start        DATE        NOT NULL,
+  period_end          DATE        NOT NULL,
+  payload             JSONB       NOT NULL,
+  executive_summary   TEXT,
+  confidence          TEXT,
+  confidence_score    INTEGER,
+  accounting_method   TEXT        NOT NULL DEFAULT 'Accrual',
+  source_snapshot_ids UUID[]      NOT NULL DEFAULT '{}',
+  -- Hash over the contributing snapshots' identity and fetch time. When the
+  -- current fingerprint differs, QuickBooks data changed after generation.
+  source_fingerprint  TEXT        NOT NULL DEFAULT '',
+  mapping_version_id  UUID REFERENCES account_mapping_versions(id) ON DELETE SET NULL,
+  mapping_version     INTEGER,
+  ai_prompt_version   TEXT        NOT NULL DEFAULT 'none',
+  ai_model            TEXT,
+  app_version         TEXT        NOT NULL DEFAULT 'unknown',
+  generated_by        TEXT        NOT NULL DEFAULT 'manual',
+  generated_by_user   UUID REFERENCES users(id) ON DELETE SET NULL,
+  generated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (report_id, version)
+);
+CREATE INDEX IF NOT EXISTS report_versions_report_idx ON report_versions(report_id, version DESC);
+CREATE INDEX IF NOT EXISTS report_versions_company_idx ON report_versions(company_id, period_start DESC);
+
+ALTER TABLE generated_reports
+  ADD COLUMN IF NOT EXISTS current_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE generated_reports
+  ADD COLUMN IF NOT EXISTS confidence_score INTEGER;
+ALTER TABLE generated_reports
+  ADD COLUMN IF NOT EXISTS accounting_method TEXT NOT NULL DEFAULT 'Accrual';
+ALTER TABLE generated_reports
+  ADD COLUMN IF NOT EXISTS source_fingerprint TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE ai_insights
+  ADD COLUMN IF NOT EXISTS prompt_version TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE chat_messages
+  ADD COLUMN IF NOT EXISTS prompt_version TEXT;
+ALTER TABLE chat_messages
+  ADD COLUMN IF NOT EXISTS accounting_method TEXT;
+
+-- --------------------------------------------------------------------------
+-- Sync locking
+--
+-- Prevents two schedulers, or a scheduler and a manual sync, from importing
+-- the same company-month at once. Locks carry an expiry so a crashed process
+-- cannot block a company forever.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sync_locks (
+  company_id  UUID        NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  lock_key    TEXT        NOT NULL,
+  owner_token TEXT        NOT NULL,
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (company_id, lock_key)
+);
+CREATE INDEX IF NOT EXISTS sync_locks_expiry_idx ON sync_locks(expires_at);
+
+-- --------------------------------------------------------------------------
+-- Performance indexes for large companies
+--
+-- Sized for a company with a few hundred thousand transactions, where the
+-- review queue, vendor spend and drill-down are the hot paths.
+-- --------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS transactions_company_entity_date_idx
+  ON transactions(company_id, entity_type, txn_date);
+CREATE INDEX IF NOT EXISTS transactions_abs_amount_idx
+  ON transactions(company_id, txn_date, (ABS(total_amount)) DESC);
+CREATE INDEX IF NOT EXISTS transactions_entity_name_idx
+  ON transactions(company_id, entity_name);
+CREATE INDEX IF NOT EXISTS txn_lines_company_account_idx
+  ON transaction_lines(company_id, account_qbo_id, amount);
+CREATE INDEX IF NOT EXISTS monthly_account_metrics_category_idx
+  ON monthly_account_metrics(company_id, category_key, period_start);
+CREATE INDEX IF NOT EXISTS monthly_vendor_spend_name_idx
+  ON monthly_vendor_spend(company_id, vendor_name, period_start);

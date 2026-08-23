@@ -1,5 +1,6 @@
 import { AppError } from '../errors';
 import { logger } from '../logger';
+import { event } from '../observability';
 import {
   getConnectionForCompany,
   getTokens,
@@ -41,10 +42,11 @@ export async function getValidAccessToken(connectionId: string): Promise<string>
     const refreshed = await refreshAccessToken(tokens.refreshToken);
     await saveRefreshedTokens(connectionId, refreshed);
     await recordAudit({ action: 'quickbooks.token_refreshed', entityType: 'connection', entityId: connectionId });
-    logger.info('quickbooks token refreshed', { connectionId });
+    event('qbo.token_refreshed', { connectionId });
     return refreshed.accessToken;
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Token refresh failed';
+    event('qbo.token_refresh_failed', { connectionId, reason: message });
     await recordRefreshFailure(connectionId, message);
     await recordAudit({
       action: 'quickbooks.token_refresh_failed',

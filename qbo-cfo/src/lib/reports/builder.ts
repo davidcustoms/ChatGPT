@@ -12,6 +12,8 @@ import {
   getVendorSpendRange,
 } from '../db/repositories/metrics';
 import { listThresholds } from '../db/repositories/anomalies';
+import { latestJob } from '../db/repositories/jobs';
+import { latestSnapshotFetchedAt, snapshotFingerprint } from '../db/repositories/snapshots';
 import {
   amountStatsByType,
   duplicateCandidates,
@@ -19,9 +21,11 @@ import {
   missingDimensionCount,
   newVendorsInPeriod,
 } from '../db/repositories/transactions';
-import { inventorySummary, listDimensions } from '../db/repositories/masterdata';
+import { accountIndex, inventorySummary, listDimensions } from '../db/repositories/masterdata';
 import { getSnapshot } from '../db/repositories/snapshots';
 import { AppError } from '../errors';
+import { basisDescription, basisLabel } from '../finance/basis';
+import { computeMappingCoverage } from '../finance/coverage';
 import { detectAnomalies } from '../finance/anomalies';
 import { buildCashPosition, aggregateMetrics, buildPnlRows } from '../finance/comparisons';
 import { evaluateDataQuality } from '../finance/data-quality';
@@ -31,6 +35,7 @@ import { buildExpenseAnalysis } from '../finance/metrics';
 import { pctChange, round2, safeDivide } from '../finance/math';
 import { isUncategorizedAccount } from '../finance/transaction-review';
 import type { MonthlyMetrics } from '../finance/types';
+import { buildProvenanceIndex } from './provenance';
 import { flattenReport, summaryByLabel } from '../qbo/parse';
 import type { QboReport } from '../qbo/report-types';
 import {
@@ -52,11 +57,17 @@ import type { HeadlineMetric, ReportPayload, TrendPoint, VendorSpendRow, Balance
  * The AI layer runs *after* this and may only reference numbers that appear
  * here. Nothing in this function calls a language model.
  */
+export interface BuiltReport {
+  payload: ReportPayload;
+  /** Identity of the raw QuickBooks data the payload was computed from. */
+  source: { fingerprint: string; snapshotIds: string[]; fetchedAt: string | null };
+}
+
 export async function buildReportPayload(input: {
   companyId: string;
   period: Period;
   today?: Date;
-}): Promise<ReportPayload> {
+}): Promise<BuiltReport> {
   const { companyId, period } = input;
 
   const company = await getCompany(companyId);
@@ -176,7 +187,9 @@ export async function buildReportPayload(input: {
     storeCurrent[0]?.dimension ?? (company.trackingDimension === 'class' ? 'class' : 'none');
 
   // --- cash flow (only if QuickBooks provided the statement) ---------------
-  const cashFlowSnapshot = await getSnapshot<QboReport>(companyId, 'CashFlow', period);
+  const cashFlowSnapshot = await getSnapshot<QboReport>(
+    companyId, 'CashFlow', period, 'total', company.accountingMethod,
+  );
   let cashFlow: { operating: number | null; investing: number | null; financing: number | null } | null = null;
   if (cashFlowSnapshot) {
     const flat = flattenReport(cashFlowSnapshot.payload);
@@ -236,6 +249,42 @@ export async function buildReportPayload(input: {
     missingDimensionCount(companyId, period, storeDimension === 'class' ? 'class' : 'location'),
   ]);
 
+  // --- mapping coverage ----------------------------------------------------
+  const accounts = await accountIndex(companyId);
+  const mapping = await effectiveMappingIndex(companyId);
+  const mappingCoverage = computeMappingCoverage({
+    accountAmounts: accountRows.map((r) => ({
+      accountQboId: r.accountQboId,
+      accountName: r.accountName,
+      classification: r.classification,
+      categoryKey: r.categoryKey,
+      amount: r.amount,
+    })),
+    accounts,
+    mapping,
+  });
+
+  // --- scoring inputs ------------------------------------------------------
+  const [fingerprint, lastFetchedAt, lastSyncJob] = await Promise.all([
+    snapshotFingerprint(companyId, period, company.accountingMethod),
+    latestSnapshotFetchedAt(companyId),
+    latestJob(companyId),
+  ]);
+
+  const now = input.today ?? new Date();
+  const daysSinceLastSync = lastFetchedAt
+    ? (now.getTime() - new Date(lastFetchedAt).getTime()) / 86_400_000
+    : null;
+
+  const syncStatus: 'completed' | 'partial' | 'failed' | 'none' =
+    lastSyncJob === null
+      ? 'none'
+      : lastSyncJob.status === 'failed'
+        ? 'failed'
+        : lastSyncJob.status === 'partial'
+          ? 'partial'
+          : 'completed';
+
   const quality = evaluateDataQuality({
     period,
     metrics,
@@ -251,6 +300,32 @@ export async function buildReportPayload(input: {
     oldPayables90Plus: apAging?.total.days90Plus ?? null,
     missingDimension: dimensionCoverage,
     today: input.today,
+    scoring: {
+      hasProfitAndLoss: Boolean(metrics.netSales !== 0 || metrics.operatingExpenses !== 0),
+      hasBalanceSheet: metrics.balanceSheetBalanced !== null,
+      hasReceivableAging: arAging !== null,
+      hasPayableAging: apAging !== null,
+      balanceSheetBalanced: metrics.balanceSheetBalanced,
+      mappingCoverage: mappingCoverage.overallCoverage,
+      unmappedAmount: mappingCoverage.totalUnmappedAmount,
+      unmappedAccountCount: mappingCoverage.totalUnmappedAccounts,
+      uncategorizedShareOfOpex:
+        metrics.operatingExpenses > 0
+          ? uncategorizedBalances.reduce((a, b) => a + Math.abs(b.amount), 0) / metrics.operatingExpenses
+          : 0,
+      uncategorizedAmount: uncategorizedBalances.reduce((a, b) => a + Math.abs(b.amount), 0),
+      missingDimensionShare:
+        dimensionCoverage.total > 0 ? dimensionCoverage.missing / dimensionCoverage.total : null,
+      dimensionReportingActive: storeDimension !== 'none',
+      lastSyncStatus: syncStatus,
+      syncWarningCount: lastSyncJob?.errorMessage ? lastSyncJob.errorMessage.split('\n').length : 0,
+      hasPriorMonth: priorMetrics !== null,
+      hasSameMonthLastYear: lastYearMetrics !== null,
+      trailingMonthsAvailable: t12Rows.length,
+      criticalAnomalies: anomalies.filter((a) => a.severity === 'CRITICAL').length,
+      importantAnomalies: anomalies.filter((a) => a.severity === 'IMPORTANT').length,
+      daysSinceLastSync,
+    },
   });
 
   // --- presentation --------------------------------------------------------
@@ -272,7 +347,7 @@ export async function buildReportPayload(input: {
 
   const balanceSheetRows = buildBalanceSheetRows(metrics, priorMetrics);
 
-  return {
+  const payload: ReportPayload = {
     version: 1,
     companyId,
     companyName,
@@ -282,6 +357,11 @@ export async function buildReportPayload(input: {
     generatedAt: new Date().toISOString(),
     dataThrough: period.end,
     sourceSystem: company.isDemo ? 'Demo data (synthetic)' : 'QuickBooks Online',
+    accountingMethod: company.accountingMethod,
+    basisLabel: basisLabel(company.accountingMethod),
+    basisDescription: basisDescription(company.accountingMethod),
+    // Filled in by the generator once the version row is written.
+    provenanceVersion: null,
     metrics,
     comparisons: {
       priorMonth: priorMetrics,
@@ -320,10 +400,29 @@ export async function buildReportPayload(input: {
     insights: [],
     observations,
     executiveSummary: null,
+    mappingCoverage,
+    provenance: buildProvenanceIndex(metrics),
+    comparisonAvailability: {
+      priorMonth: priorMetrics !== null,
+      sameMonthLastYear: lastYearMetrics !== null,
+      yearToDate: ytdMetrics !== null,
+      priorYearToDate: pytdMetrics !== null,
+      trailingMonths: t12Rows.length,
+    },
     dataQuality: {
       checks: quality.checks,
+      score: quality.score,
       confidence: quality.confidence,
       reasons: quality.reasons,
+    },
+  };
+
+  return {
+    payload,
+    source: {
+      fingerprint: fingerprint.fingerprint,
+      snapshotIds: fingerprint.snapshotIds,
+      fetchedAt: fingerprint.fetchedAt,
     },
   };
 }

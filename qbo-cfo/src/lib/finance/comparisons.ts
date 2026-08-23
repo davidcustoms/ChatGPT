@@ -123,6 +123,8 @@ export function aggregateMetrics(rows: MonthlyMetrics[], period: Period): Monthl
   return {
     companyId: first.companyId,
     period,
+    // Every month in the range shares one basis; the engine never mixes them.
+    accountingMethod: first.accountingMethod,
     grossSales: total('grossSales'),
     discounts: total('discounts'),
     refunds: total('refunds'),

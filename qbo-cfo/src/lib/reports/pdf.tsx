@@ -160,7 +160,7 @@ function Footer({ payload, branding }: { payload: ReportPayload; branding: Brand
   return (
     <View style={styles.footer} fixed>
       <Text>
-        {payload.companyName} · {payload.periodLabel}
+        {payload.companyName} · {payload.periodLabel} · {payload.basisLabel}
         {branding.confidential ? ' · Confidential' : ''}
       </Text>
       <Text
@@ -221,8 +221,13 @@ function ReportDocument({
         <Text style={styles.coverCompany}>{payload.companyName}</Text>
         <Text style={styles.coverTitle}>{payload.periodLabel} Executive Financial Report</Text>
         <Text style={styles.coverMeta}>
-          Data through {formatDate(payload.dataThrough)} · Source: {payload.sourceSystem} · Report confidence:{' '}
-          {payload.dataQuality.confidence.toUpperCase()} · Generated {formatDate(payload.generatedAt)}
+          {payload.basisLabel} · Data through {formatDate(payload.dataThrough)} · Source: {payload.sourceSystem}
+          {'\n'}
+          Report confidence: {payload.dataQuality.score.score}/100 ({payload.dataQuality.score.bandLabel}) ·
+          Generated {formatDate(payload.generatedAt)}
+          {payload.provenanceVersion
+            ? `\nVersion ${payload.provenanceVersion.reportVersion} · App ${payload.provenanceVersion.appVersion} · Prompt ${payload.provenanceVersion.aiPromptVersion} · Mapping v${payload.provenanceVersion.mappingVersion}`
+            : ''}
         </Text>
         <KpiCards payload={payload} />
         <Text style={styles.subTitle}>Needs Your Attention</Text>
@@ -507,7 +512,65 @@ function ReportDocument({
         <Footer payload={payload} branding={branding} />
       </Page>
 
-      {/* 11. Risks & opportunities */}
+      {/* 11. Data quality */}
+      <Page size="LETTER" style={styles.page}>
+        <Text style={styles.sectionTitle}>Data Quality</Text>
+        <Text style={styles.paragraph}>
+          Report confidence is {payload.dataQuality.score.score} out of 100 ({payload.dataQuality.score.bandLabel}).
+          It measures the cleanliness of the underlying bookkeeping, not the accuracy of the calculations, and is
+          computed deterministically by the application.
+        </Text>
+        {payload.dataQuality.score.deductions.length > 0 ? (
+          <Table
+            columns={[
+              { label: 'Points', width: '12%', align: 'right' },
+              { label: 'Factor', width: '26%' },
+              { label: 'Reason', width: '62%' },
+            ]}
+            rows={payload.dataQuality.score.deductions.map((d) => ({
+              cells: [`-${d.points}`, d.label, d.reason],
+            }))}
+          />
+        ) : (
+          <Text style={styles.paragraph}>No deductions — every scored factor is clean.</Text>
+        )}
+
+        <Text style={styles.subTitle}>Mapping coverage</Text>
+        <Table
+          columns={[
+            { label: 'Section', width: '34%' },
+            { label: 'Mapped', width: '18%', align: 'right' },
+            { label: 'Unmapped', width: '18%', align: 'right' },
+            { label: 'Accounts', width: '14%', align: 'right' },
+            { label: 'Coverage', width: '16%', align: 'right' },
+          ]}
+          rows={payload.mappingCoverage.sections.map((sec) => ({
+            cells: [
+              sec.label,
+              money(sec.mappedAmount),
+              money(sec.unmappedAmount),
+              String(sec.unmappedAccountCount),
+              formatPercent(sec.coverage),
+            ],
+          }))}
+        />
+        {payload.mappingCoverage.byCategory.filter((c) => c.caveat).length > 0 ? (
+          <>
+            <Text style={styles.subTitle}>Categories with incomplete mapping</Text>
+            {payload.mappingCoverage.byCategory
+              .filter((c) => c.caveat)
+              .slice(0, 10)
+              .map((c, i) => (
+                <Text key={i} style={styles.note}>
+                  • {c.caveat}
+                </Text>
+              ))}
+          </>
+        ) : null}
+        <Footer payload={payload} branding={branding} />
+      </Page>
+
+      {/* 12. Risks & opportunities */}
       <Page size="LETTER" style={styles.page}>
         <Text style={styles.sectionTitle}>Risks &amp; Opportunities</Text>
         {payload.insights.map((i, idx) => (
@@ -530,7 +593,7 @@ function ReportDocument({
         <Footer payload={payload} branding={branding} />
       </Page>
 
-      {/* 12. Recommended actions */}
+      {/* 13. Recommended actions */}
       <Page size="LETTER" style={styles.page}>
         <Text style={styles.sectionTitle}>Recommended Actions</Text>
         <Table
@@ -545,8 +608,9 @@ function ReportDocument({
           }))}
         />
         <Text style={styles.note}>
-          This report is management information derived from {payload.sourceSystem}. It is not an audit, a tax
-          opinion, or a substitute for review by your CPA.
+          This report is management information derived from {payload.sourceSystem} on a{' '}
+          {payload.basisLabel.toLowerCase()}. It is not an audit, a tax opinion, or a substitute for review by
+          your CPA.
         </Text>
         {branding.footerText ? <Text style={styles.note}>{branding.footerText}</Text> : null}
         <Footer payload={payload} branding={branding} />

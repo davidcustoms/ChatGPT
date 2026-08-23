@@ -3,6 +3,10 @@ import { notFound } from 'next/navigation';
 import { requireUserPage } from '@/lib/auth/guards';
 import { userCanAccessCompany } from '@/lib/db/repositories/companies';
 import { getInsights, getReport } from '@/lib/db/repositories/reports';
+import { listVersionSummaries } from '@/lib/db/repositories/report-versions';
+import { checkReportStaleness } from '@/lib/reports/staleness';
+import { formatDateTime } from '@/lib/util/format';
+import { RegenerateBanner } from './regenerate-banner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/states';
@@ -51,7 +55,11 @@ export default async function ReportDetailPage({
   const payload = report.payload as ReportPayload;
   // Insights are stored separately so they can be regenerated without rebuilding
   // the deterministic payload.
-  const insights = await getInsights(reportId);
+  const [insights, staleness, versions] = await Promise.all([
+    getInsights(reportId),
+    checkReportStaleness({ reportId, companyId: report.companyId, period: report.period }),
+    listVersionSummaries(reportId),
+  ]);
   const merged: ReportPayload = {
     ...payload,
     insights: insights.length > 0 ? insights : payload.insights,
@@ -81,6 +89,39 @@ export default async function ReportDetailPage({
           </>
         }
       />
+      {staleness?.stale ? (
+        <RegenerateBanner
+          companyId={report.companyId}
+          period={report.period.start.slice(0, 7)}
+          message={staleness.message ?? 'The underlying data has changed since this report was generated.'}
+          generatedAt={staleness.generatedAt}
+          version={staleness.version}
+        />
+      ) : null}
+
+      {versions.length > 1 ? (
+        <details className="mb-4 rounded-[var(--radius-card)] border border-border bg-surface px-4 py-3">
+          <summary className="cursor-pointer text-sm font-medium text-navy-800">
+            Version history ({versions.length} versions)
+          </summary>
+          <ul className="mt-2 space-y-1.5 text-xs text-ink-muted">
+            {versions.map((v) => (
+              <li key={v.version} className="flex flex-wrap gap-x-3 border-b border-border pb-1.5 last:border-0">
+                <span className="font-medium text-ink">Version {v.version}</span>
+                <span>{formatDateTime(v.generatedAt)}</span>
+                <span>{v.generatedBy}</span>
+                <span>{v.accountingMethod} basis</span>
+                <span>score {v.confidenceScore ?? '—'}/100</span>
+                <span>app {v.appVersion}</span>
+                <span>prompt {v.aiPromptVersion}</span>
+                <span>mapping v{v.mappingVersion ?? '—'}</span>
+                <span className="font-mono">{v.sourceFingerprint.slice(0, 8)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
       <ReportView payload={merged} />
     </>
   );

@@ -6,6 +6,7 @@ import { recordAudit } from '@/lib/db/repositories/audit';
 import { buildAuthorizeUrl } from '@/lib/qbo/oauth';
 import { toErrorPayload } from '@/lib/errors';
 import { env } from '@/lib/env';
+import { event } from '@/lib/observability';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +43,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       entityId: companyId,
     });
 
+    event('oauth.started', { companyId });
     return NextResponse.redirect(buildAuthorizeUrl(state));
   } catch (err) {
     const { error } = toErrorPayload(err);

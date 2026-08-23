@@ -1,4 +1,5 @@
 import { CATEGORY_BY_KEY } from './categories';
+import type { AccountingMethod } from './basis';
 import { round2, safeDivide } from './math';
 import type { AccountAmount, MonthlyMetrics } from './types';
 import type { ParsedBalanceSheet, ParsedProfitAndLoss } from '../qbo/statements';
@@ -15,6 +16,8 @@ import type { Period } from '../util/dates';
 export interface ComputeInput {
   companyId: string;
   period: Period;
+  /** The basis the source reports were pulled on. Stamped onto the result. */
+  accountingMethod?: AccountingMethod;
   pnl: ParsedProfitAndLoss;
   balanceSheet: ParsedBalanceSheet | null;
   /** account qboId -> management category key (approved mappings only). */
@@ -127,6 +130,7 @@ export function computeMonthlyMetrics(input: ComputeInput): ComputeResult {
   const metrics: MonthlyMetrics = {
     companyId,
     period,
+    accountingMethod: input.accountingMethod ?? 'Accrual',
     grossSales,
     discounts,
     refunds,

@@ -1,4 +1,5 @@
 import { dateOnly, num, query, queryOne } from '../pool';
+import { normalizeMethod, type AccountingMethod } from '../../finance/basis';
 
 export interface CompanyRow {
   id: string;
@@ -12,6 +13,7 @@ export interface CompanyRow {
   tracking_dimension: 'auto' | 'location' | 'class' | 'none';
   materiality_amount: string;
   materiality_pct: string;
+  accounting_method: string;
   created_at: Date;
 }
 
@@ -27,6 +29,8 @@ export interface Company {
   trackingDimension: 'auto' | 'location' | 'class' | 'none';
   materialityAmount: number;
   materialityPct: number;
+  /** Reporting basis. Accrual and cash are never mixed within a report. */
+  accountingMethod: AccountingMethod;
 }
 
 export function toCompany(row: CompanyRow): Company {
@@ -42,6 +46,7 @@ export function toCompany(row: CompanyRow): Company {
     trackingDimension: row.tracking_dimension,
     materialityAmount: num(row.materiality_amount),
     materialityPct: num(row.materiality_pct),
+    accountingMethod: normalizeMethod(row.accounting_method),
   };
 }
 
@@ -108,6 +113,7 @@ export async function updateCompanySettings(
     trackingDimension: 'auto' | 'location' | 'class' | 'none';
     materialityAmount: number;
     materialityPct: number;
+    accountingMethod: AccountingMethod;
   }>,
 ): Promise<void> {
   await query(
@@ -118,6 +124,7 @@ export async function updateCompanySettings(
        tracking_dimension = COALESCE($5, tracking_dimension),
        materiality_amount = COALESCE($6, materiality_amount),
        materiality_pct = COALESCE($7, materiality_pct),
+       accounting_method = COALESCE($8, accounting_method),
        updated_at = now()
      WHERE id = $1`,
     [
@@ -128,6 +135,7 @@ export async function updateCompanySettings(
       patch.trackingDimension ?? null,
       patch.materialityAmount ?? null,
       patch.materialityPct ?? null,
+      patch.accountingMethod ?? null,
     ],
   );
 }

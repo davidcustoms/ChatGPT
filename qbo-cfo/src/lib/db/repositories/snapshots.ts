@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { query, queryOne } from '../pool';
 import type { Period } from '../../util/dates';
+import type { AccountingMethod } from '../../finance/basis';
 
 export type ReportType =
   | 'ProfitAndLoss'
@@ -77,6 +79,7 @@ export async function getSnapshot<T = unknown>(
   reportType: ReportType | string,
   period: Period,
   dimension: SnapshotDimension = 'total',
+  accountingMethod: AccountingMethod = 'Accrual',
 ): Promise<SnapshotRow<T> | null> {
   const row = await queryOne<{
     id: string;
@@ -89,9 +92,10 @@ export async function getSnapshot<T = unknown>(
   }>(
     `SELECT id, report_type, period_start, period_end, dimension, payload, source_fetched_at
        FROM report_snapshots
-      WHERE company_id = $1 AND report_type = $2 AND period_start = $3 AND period_end = $4 AND dimension = $5
+      WHERE company_id = $1 AND report_type = $2 AND period_start = $3 AND period_end = $4
+        AND dimension = $5 AND accounting_method = $6
       LIMIT 1`,
-    [companyId, reportType, period.start, period.end, dimension],
+    [companyId, reportType, period.start, period.end, dimension, accountingMethod],
   );
   if (!row) return null;
   return {
@@ -132,4 +136,57 @@ export async function pruneSnapshots(companyId: string, retentionMonths: number)
     [companyId, String(retentionMonths)],
   );
   return Number(rows[0]?.count ?? 0);
+}
+
+/**
+ * Fingerprint of the raw QuickBooks data behind one reporting month.
+ *
+ * Combines each contributing snapshot's identity with a content hash, so the
+ * fingerprint changes whenever a re-sync brings back different numbers -- which
+ * is how a generated report detects that QuickBooks data changed underneath it.
+ */
+export async function snapshotFingerprint(
+  companyId: string,
+  period: Period,
+  accountingMethod: AccountingMethod = 'Accrual',
+): Promise<{ fingerprint: string; snapshotIds: string[]; fetchedAt: string | null }> {
+  const rows = await query<{
+    id: string;
+    report_type: string;
+    dimension: string;
+    content_hash: string;
+    source_fetched_at: Date;
+  }>(
+    `SELECT id, report_type, dimension, md5(payload::text) AS content_hash, source_fetched_at
+       FROM report_snapshots
+      WHERE company_id = $1 AND period_start = $2 AND period_end = $3
+        AND (accounting_method = $4 OR report_type IN ('AgedReceivables','AgedPayables','CashFlow'))
+      ORDER BY report_type, dimension`,
+    [companyId, period.start, period.end, accountingMethod],
+  );
+
+  const canonical = rows
+    .map((r) => `${r.report_type}|${r.dimension}|${r.content_hash}`)
+    .join('\n');
+
+  return {
+    fingerprint: createHash('sha256').update(canonical).digest('hex'),
+    snapshotIds: rows.map((r) => r.id),
+    fetchedAt:
+      rows.length > 0
+        ? rows
+            .map((r) => r.source_fetched_at.toISOString())
+            .sort()
+            .at(-1) ?? null
+        : null,
+  };
+}
+
+/** Most recent fetch time across a company's snapshots, used for staleness scoring. */
+export async function latestSnapshotFetchedAt(companyId: string): Promise<string | null> {
+  const row = await queryOne<{ fetched_at: Date | null }>(
+    'SELECT MAX(source_fetched_at) AS fetched_at FROM report_snapshots WHERE company_id = $1',
+    [companyId],
+  );
+  return row?.fetched_at ? row.fetched_at.toISOString() : null;
 }

@@ -84,6 +84,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 trackingDimension: company.trackingDimension,
                 materialityAmount: company.materialityAmount,
                 materialityPct: company.materialityPct,
+                accountingMethod: company.accountingMethod,
               }}
             />
           </CardContent>
@@ -97,6 +98,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <CardContent>
               <dl className="space-y-2 text-sm">
                 {[
+                  ['Reporting basis', `${company.accountingMethod} basis`],
                   ['Fiscal year starts', monthName(company.fiscalYearStartMonth)],
                   ['Currency', company.currencyCode],
                   ['Tracking dimension', company.trackingDimension],

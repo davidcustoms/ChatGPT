@@ -61,6 +61,29 @@ const CATEGORY_KEYWORDS: Array<[string, RegExp]> = [
   ['cogs', /cogs|cost of goods|cost of sales/i],
 ];
 
+/**
+ * Named financial metrics this application deliberately does not compute.
+ *
+ * Without this list a question like "what was our EBITDA-adjusted customer
+ * lifetime value in April?" would fall through to the month summary — the
+ * owner would get a confident wall of correct figures that answers a question
+ * they did not ask. Saying "I do not track that" is the safe answer.
+ */
+const UNSUPPORTED_METRICS =
+  /\bebitda?\b|lifetime value|\bltv\b|\bcac\b|customer acquisition cost|\bchurn\b|\bmrr\b|\barr\b|\bburn rate\b|\brunway\b|earnings per share|\beps\b|net promoter|\bnps\b|conversion rate|\bheadcount\b|\bebit\b|free cash flow|\bwacc\b|\birr\b|\bnpv\b/i;
+
+/**
+ * Subjects the resolver can actually report on. A question that names a period
+ * but none of these is not a month summary — it is a question about something
+ * else that happens to mention a date.
+ */
+const SUPPORTED_SUBJECT =
+  /revenue|sales|profit|income|margin|expense|cost|spend|spent|cash|payroll|advertis|rent\b|vendor|supplier|store|location|inventor|receivab|payab|balance|assets|liabilit|equity|cogs|fees|financ|bill|invoice|discount|refund|return/i;
+
+/** Phrasings that ask for the month as a whole. */
+const SUMMARY_PHRASE =
+  /how did we do|how did .* (look|go)|how was|summar(y|ise|ize)|overview|recap|performance|results|how are we doing|walk me through|tell me about/i;
+
 const WORD_NUMBERS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
   seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12,
@@ -129,6 +152,9 @@ function pickIntent(
   hasVendor: boolean,
   hasCategory: boolean,
 ): QueryIntent {
+  // Checked first: a metric we do not compute is unanswerable no matter what
+  // else the sentence contains.
+  if (UNSUPPORTED_METRICS.test(lower)) return 'unknown';
   if (/what should i (pay attention|focus)|needs? my attention|what.*watch/.test(lower)) return 'attention';
   if (/worst (three|3|\d+)? ?months?|worst months/.test(lower)) return 'worst_months';
   if (/best (three|3|\d+)? ?months?|best months/.test(lower)) return 'best_months';
@@ -149,8 +175,11 @@ function pickIntent(
     return 'expense_drivers';
   }
   if (hasCategory && /how much|spend|spent|total/.test(lower)) return 'category_detail';
-  if (/how did we do|how was|summary|last month|overview|performance/.test(lower)) return 'month_summary';
-  return periodCount > 0 ? 'month_summary' : 'unknown';
+  if (SUMMARY_PHRASE.test(lower) || /last month/.test(lower)) return 'month_summary';
+  // A bare period mention only means "summarise that month" when the question
+  // is about something the resolver reports on. Otherwise we do not know what
+  // was asked, and say so.
+  return periodCount > 0 && SUPPORTED_SUBJECT.test(lower) ? 'month_summary' : 'unknown';
 }
 
 /** Resolves "????-08"-style hints against the periods actually available. */

@@ -30,8 +30,11 @@ export async function POST(request: Request) {
 
     const conversationId = body.conversationId ?? crypto.randomUUID();
     await query(
-      `INSERT INTO chat_messages (company_id, user_id, conversation_id, role, content, intent, resolved_data, data_through)
-       VALUES ($1,$2,$3,'user',$4,$5,NULL,NULL), ($1,$2,$3,'assistant',$6,$5,$7,$8)`,
+      `INSERT INTO chat_messages
+         (company_id, user_id, conversation_id, role, content, intent, resolved_data, data_through,
+          prompt_version, accounting_method)
+       VALUES ($1,$2,$3,'user',$4,$5,NULL,NULL,NULL,$9),
+              ($1,$2,$3,'assistant',$6,$5,$7,$8,$10,$9)`,
       [
         company.id,
         user.id,
@@ -41,6 +44,8 @@ export async function POST(request: Request) {
         result.answer,
         JSON.stringify(result.data),
         result.dataThrough,
+        result.accountingMethod,
+        result.promptVersion,
       ],
     );
 
@@ -48,7 +53,13 @@ export async function POST(request: Request) {
       companyId: company.id,
       userId: user.id,
       action: 'chat.question',
-      metadata: { intent: result.intent, aiUsed: result.aiUsed },
+      metadata: {
+        intent: result.intent,
+        aiUsed: result.aiUsed,
+        promptVersion: result.promptVersion,
+        basis: result.accountingMethod,
+        caveats: result.caveats.length,
+      },
     });
 
     return {
@@ -58,7 +69,19 @@ export async function POST(request: Request) {
       data: result.data,
       dataThrough: result.dataThrough,
       source: result.source,
+      basis: { method: result.accountingMethod, label: result.basisLabel },
+      caveats: result.caveats,
+      provenance: result.provenance.map((p) => ({
+        metricKey: p.metricKey,
+        label: p.label,
+        value: p.value,
+        formula: p.formula,
+        sourceReport: p.sourceReport,
+        period: p.period,
+        basis: p.accountingMethod,
+      })),
       aiUsed: result.aiUsed,
+      promptVersion: result.promptVersion,
     };
   });
 }

@@ -18,6 +18,7 @@ export function MetricCard({
   /** true when a decrease is the good outcome (e.g. expenses). */
   invert = false,
   href,
+  footer,
   className,
 }: {
   label: string;
@@ -30,6 +31,8 @@ export function MetricCard({
   comparisonLabel?: string;
   invert?: boolean;
   href?: string;
+  /** Slot for a provenance link or other per-metric affordance. */
+  footer?: React.ReactNode;
   className?: string;
 }) {
   const display =
@@ -79,12 +82,20 @@ export function MetricCard({
 
   if (href) {
     return (
-      <a href={href} className={classes}>
-        {body}
-      </a>
+      <div className={classes}>
+        <a href={href} className="block">
+          {body}
+        </a>
+        {footer ? <div className="mt-1.5">{footer}</div> : null}
+      </div>
     );
   }
-  return <div className={classes}>{body}</div>;
+  return (
+    <div className={classes}>
+      {body}
+      {footer ? <div className="mt-1.5">{footer}</div> : null}
+    </div>
+  );
 }
 
 /** Inline signed change, used inside tables. */

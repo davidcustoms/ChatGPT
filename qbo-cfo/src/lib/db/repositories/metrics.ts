@@ -1,5 +1,6 @@
 import { num, numOrNull, query, queryOne, withTransaction } from '../pool';
 import type { AgingSnapshot, LocationMetrics, MonthlyMetrics, VendorSpend } from '../../finance/types';
+import { normalizeMethod, type AccountingMethod } from '../../finance/basis';
 import type { Period } from '../../util/dates';
 
 const METRIC_COLUMNS = [
@@ -31,6 +32,7 @@ function toMetrics(row: MetricsRow): MonthlyMetrics {
       start: row.period_start.toISOString().slice(0, 10),
       end: row.period_end.toISOString().slice(0, 10),
     },
+    accountingMethod: normalizeMethod(row['accounting_method']),
     grossSales: n('gross_sales'),
     discounts: n('discounts'),
     refunds: n('refunds'),
@@ -112,14 +114,19 @@ const CAMEL: Record<string, keyof MonthlyMetrics> = {
  * duplicate snapshot when a month is re-imported.
  */
 export async function saveMonthlyMetrics(metrics: MonthlyMetrics): Promise<void> {
-  const cols = ['company_id', 'period_start', 'period_end', ...METRIC_COLUMNS, 'source_snapshot_ids'];
+  const cols = [
+    'company_id', 'period_start', 'period_end',
+    ...METRIC_COLUMNS,
+    'source_snapshot_ids', 'accounting_method',
+  ];
   const values: unknown[] = [metrics.companyId, metrics.period.start, metrics.period.end];
   for (const col of METRIC_COLUMNS) {
     values.push(metrics[CAMEL[col] as keyof MonthlyMetrics] ?? null);
   }
   values.push(metrics.sourceSnapshotIds);
+  values.push(metrics.accountingMethod);
   const placeholders = cols.map((_, i) => `$${i + 1}`).join(',');
-  const updates = [...METRIC_COLUMNS, 'source_snapshot_ids']
+  const updates = [...METRIC_COLUMNS, 'source_snapshot_ids', 'accounting_method']
     .map((c) => `${c} = EXCLUDED.${c}`)
     .join(', ');
   await query(
@@ -270,6 +277,7 @@ export async function saveLocationMetrics(
   companyId: string,
   period: Period,
   rows: LocationMetrics[],
+  accountingMethod: AccountingMethod = 'Accrual',
 ): Promise<void> {
   await withTransaction(async (client) => {
     await client.query(
@@ -281,8 +289,9 @@ export async function saveLocationMetrics(
         `INSERT INTO monthly_location_metrics
            (company_id, period_start, period_end, dimension, dimension_qbo_id, dimension_name,
             net_sales, cogs, gross_profit, gross_margin, payroll_expense, advertising_expense,
-            rent_expense, operating_expenses, contribution_profit, contribution_margin, overhead_allocated)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            rent_expense, operating_expenses, contribution_profit, contribution_margin,
+            overhead_allocated, accounting_method)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          ON CONFLICT (company_id, period_start, dimension, dimension_name) DO UPDATE SET
            net_sales = EXCLUDED.net_sales, cogs = EXCLUDED.cogs, gross_profit = EXCLUDED.gross_profit,
            gross_margin = EXCLUDED.gross_margin, payroll_expense = EXCLUDED.payroll_expense,
@@ -294,7 +303,7 @@ export async function saveLocationMetrics(
           companyId, period.start, period.end, r.dimension, r.dimensionQboId, r.dimensionName,
           r.netSales, r.cogs, r.grossProfit, r.grossMargin, r.payrollExpense, r.advertisingExpense,
           r.rentExpense, r.operatingExpenses, r.contributionProfit, r.contributionMargin,
-          r.overheadAllocated,
+          r.overheadAllocated, accountingMethod,
         ],
       );
     }

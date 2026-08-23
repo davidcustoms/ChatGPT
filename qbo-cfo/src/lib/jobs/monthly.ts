@@ -5,6 +5,7 @@ import { pruneSnapshots } from '../db/repositories/snapshots';
 import { recordAudit } from '../db/repositories/audit';
 import { AppError } from '../errors';
 import { logger } from '../logger';
+import { event } from '../observability';
 import { generateMonthlyReport } from '../reports/generate';
 import { syncSingleMonth } from '../qbo/sync';
 import { lastClosedMonth, monthLabel, type Period } from '../util/dates';
@@ -138,6 +139,8 @@ export async function runMonthlyForAllCompanies(options: {
   const period = lastClosedMonth(today);
   const companies = await listSchedulableCompanies();
   const results: MonthlyRunResult[] = [];
+  const startedAt = Date.now();
+  event('scheduler.started', { count: companies.length, period: period.start });
 
   for (const entry of companies) {
     if (!options.force) {
@@ -155,5 +158,11 @@ export async function runMonthlyForAllCompanies(options: {
     results.push(await runMonthlyForCompany({ companyId: entry.companyId, period }));
   }
 
+  event('scheduler.finished', {
+    count: results.length,
+    period: period.start,
+    durationMs: Date.now() - startedAt,
+    status: results.some((r) => r.status === 'failed') ? 'partial' : 'ok',
+  });
   return results;
 }

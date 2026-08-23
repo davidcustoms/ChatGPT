@@ -23,6 +23,7 @@ export function CompanySettingsForm({
     trackingDimension: 'auto' | 'location' | 'class' | 'none';
     materialityAmount: number;
     materialityPct: number;
+    accountingMethod: 'Accrual' | 'Cash';
   };
 }) {
   const router = useRouter();
@@ -48,6 +49,7 @@ export function CompanySettingsForm({
           trackingDimension: form.trackingDimension,
           materialityAmount: Number(form.materialityAmount),
           materialityPct: Number(form.materialityPct),
+          accountingMethod: form.accountingMethod,
         }),
       });
       const data = (await res.json()) as { error?: { message?: string } };
@@ -101,6 +103,25 @@ export function CompanySettingsForm({
           />
         </div>
       </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="basis">Reporting basis</Label>
+        <Select
+          id="basis"
+          value={form.accountingMethod}
+          onChange={(e) =>
+            setForm({ ...form, accountingMethod: e.target.value as 'Accrual' | 'Cash' })
+          }
+        >
+          <option value="Accrual">Accrual basis</option>
+          <option value="Cash">Cash basis</option>
+        </Select>
+        <p className="text-xs text-ink-subtle">
+          Accrual counts income when earned and expenses when incurred; cash counts them when money moves.
+          Changing this changes every figure in the product. Existing months keep the basis they were pulled on
+          until you re-sync them, and the basis is shown on every report so the two are never confused.
+        </p>
+      </div>
+
       <div className="space-y-1.5">
         <Label htmlFor="dimension">Store tracking dimension</Label>
         <Select

@@ -1,6 +1,7 @@
 import { intuitApiBaseUrl } from '../env';
 import { AppError } from '../errors';
 import { logger } from '../logger';
+import { event } from '../observability';
 
 /**
  * Minimal, strictly read-only QuickBooks Online API client.
@@ -124,7 +125,7 @@ export class QuickBooksClient {
           throw new AppError('QBO_RATE_LIMITED', 'QuickBooks rate limit exceeded. Try again shortly.');
         }
         const delay = backoffDelay(attempt, response.headers.get('Retry-After'));
-        logger.warn('quickbooks rate limited, backing off', { path, attempt, delay });
+        event('qbo.rate_limited', { path, attempt, delayMs: delay });
         await this.sleep(delay);
         continue;
       }
@@ -140,6 +141,7 @@ export class QuickBooksClient {
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         const detail = extractIntuitError(text);
+        event('qbo.api_failed', { path, status: String(response.status), reason: detail.slice(0, 200) });
         if (response.status === 400 && /report|unsupported/i.test(detail)) {
           throw new AppError('QBO_REPORT_UNAVAILABLE', `QuickBooks cannot produce this report: ${detail}`);
         }

@@ -18,6 +18,7 @@ import { pctChange, round2, safeDivide } from '../finance/math';
 import { rankStores } from '../finance/locations';
 import {
   monthLabel,
+  monthName,
   monthPeriodOf,
   priorMonth,
   priorYearToDate,
@@ -32,6 +33,15 @@ import { CHAT_SYSTEM_PROMPT } from './prompts';
 import { openai } from './client';
 import { isOpenAiConfigured } from '../env';
 import { logger } from '../logger';
+import { basisLabel } from '../finance/basis';
+import type { AccountingMethod } from '../finance/basis';
+import { computeMappingCoverage } from '../finance/coverage';
+import { accountIndex } from '../db/repositories/masterdata';
+import { effectiveMappingIndex } from '../db/repositories/mappings';
+import { getAccountMetrics } from '../db/repositories/metrics';
+import { buildProvenance, describeProvenance, type MetricProvenance } from '../reports/provenance';
+import { CHAT_PROMPT_VERSION, DETERMINISTIC_PROMPT_VERSION } from '../version';
+import { untrustedBlock } from './sanitize';
 
 /**
  * Natural-language query pipeline.
@@ -49,9 +59,24 @@ export interface NlqResult {
   data: Record<string, unknown>;
   dataThrough: string | null;
   source: string;
+  /** Reporting basis the answer was computed on. Shown with every answer. */
+  accountingMethod: AccountingMethod;
+  basisLabel: string;
+  /** How the headline figures in this answer were produced. */
+  provenance: MetricProvenance[];
+  /** Uncertainty the owner must see: missing periods, poor coverage, N/M results. */
+  caveats: string[];
   /** Deterministic answer used when the model is unavailable. */
   deterministicAnswer: string;
   aiUsed: boolean;
+  promptVersion: string;
+}
+
+/** Renders a period hint back into the words the owner used. */
+function describeHint(hint: string): string {
+  if (!hint.startsWith('????')) return monthLabel(periodFromKey(hint));
+  const month = Number(hint.slice(5));
+  return monthName(month);
 }
 
 function periodFromKey(key: string): Period {
@@ -75,8 +100,13 @@ export async function answerQuestion(input: {
       data: {},
       dataThrough: null,
       source: company.isDemo ? 'Demo data (synthetic)' : 'QuickBooks Online',
+      accountingMethod: company.accountingMethod,
+      basisLabel: basisLabel(company.accountingMethod),
+      provenance: [],
+      caveats: ['No financial data is stored for this company yet.'],
       deterministicAnswer: 'No financial data is stored for this company yet.',
       aiUsed: false,
+      promptVersion: DETERMINISTIC_PROMPT_VERSION,
     };
   }
 
@@ -85,15 +115,38 @@ export async function answerQuestion(input: {
 
   // Newest first: "compare June and July" should read as July against June,
   // which is how an owner phrases the change they care about.
+  const hintResolutions = classified.periodHints.map((hint) => ({
+    hint,
+    resolved: resolvePeriodHint(hint, availableKeys),
+  }));
   const resolvedPeriods = Array.from(
-    new Set(
-      classified.periodHints
-        .map((h) => resolvePeriodHint(h, availableKeys))
-        .filter((p): p is string => p !== null),
-    ),
+    new Set(hintResolutions.map((r) => r.resolved).filter((p): p is string => p !== null)),
   )
     .sort((a, b) => b.localeCompare(a))
     .map(periodFromKey);
+
+  // A named month that is not stored must never fall back to the latest month:
+  // answering about June when the owner asked about February is the worst kind
+  // of wrong answer, because it looks right.
+  const unresolvedHints = hintResolutions.filter((r) => r.resolved === null).map((r) => r.hint);
+  if (resolvedPeriods.length === 0 && unresolvedHints.length > 0) {
+    const named = unresolvedHints.map(describeHint).join(' and ');
+    const message = `I do not have stored financial data for ${named}, so I cannot report on ${unresolvedHints.length > 1 ? 'those periods' : 'that period'}. Stored history runs from ${monthLabel(periodFromKey(availableKeys[0] ?? latest.start.slice(0, 7)))} to ${monthLabel(latest)}.`;
+    return {
+      answer: message,
+      intent: classified.intent,
+      data: { requested: unresolvedHints, available: false, stored_through: latest.end },
+      dataThrough: latest.end,
+      source: company.isDemo ? 'Demo data (synthetic)' : 'QuickBooks Online',
+      accountingMethod: company.accountingMethod,
+      basisLabel: basisLabel(company.accountingMethod),
+      provenance: [],
+      caveats: [`${named} ${unresolvedHints.length > 1 ? 'are' : 'is'} not stored, so no figures were computed.`],
+      deterministicAnswer: message,
+      aiUsed: false,
+      promptVersion: DETERMINISTIC_PROMPT_VERSION,
+    };
+  }
 
   const primary = resolvedPeriods[0] ?? latest;
   const secondary = resolvedPeriods[1] ?? null;
@@ -109,9 +162,48 @@ export async function answerQuestion(input: {
 
   const source = company.isDemo ? 'Demo data (synthetic)' : 'QuickBooks Online';
   const dataThrough = latest.end;
+  const method = company.accountingMethod;
 
-  let answer = resolved.summary;
+  // Provenance for the figures this answer leans on.
+  const primaryMetrics = await getMonthlyMetrics(input.companyId, primary);
+  const provenance: MetricProvenance[] = [];
+  if (primaryMetrics) {
+    for (const key of resolved.provenanceKeys ?? []) {
+      const p = buildProvenance(key, primaryMetrics);
+      if (p) provenance.push(p);
+    }
+  }
+
+  const caveats = [...(resolved.caveats ?? [])];
+
+  // Mapping coverage caveat for any category the answer discusses.
+  const categoryKey = classified.categoryHint;
+  if (categoryKey && primaryMetrics) {
+    const [rows, accounts, mapping] = await Promise.all([
+      getAccountMetrics(input.companyId, primary),
+      accountIndex(input.companyId),
+      effectiveMappingIndex(input.companyId),
+    ]);
+    const coverage = computeMappingCoverage({
+      accountAmounts: rows.map((r) => ({
+        accountQboId: r.accountQboId,
+        accountName: r.accountName,
+        classification: r.classification,
+        categoryKey: r.categoryKey,
+        amount: r.amount,
+      })),
+      accounts,
+      mapping,
+    });
+    const cat = coverage.byCategory.find((c) => c.categoryKey === categoryKey);
+    if (cat?.caveat) caveats.push(cat.caveat);
+  }
+
+  const deterministicAnswer = resolved.summary;
+  let answer = deterministicAnswer;
   let aiUsed = false;
+  let promptVersion = DETERMINISTIC_PROMPT_VERSION;
+
   if (isOpenAiConfigured()) {
     try {
       const client = openai();
@@ -128,12 +220,16 @@ export async function answerQuestion(input: {
               `INTENT: ${classified.intent}`,
               `DATA THROUGH: ${dataThrough}`,
               `SOURCE: ${source}`,
+              `ACCOUNTING BASIS: ${basisLabel(method)}`,
+              caveats.length > 0
+                ? `MANDATORY CAVEATS (state these; do not soften or omit them):\n${caveats.map((c) => `- ${c}`).join('\n')}`
+                : 'MANDATORY CAVEATS: none',
               '',
               'VERIFIED RESULT (the only numbers you may use):',
-              JSON.stringify(resolved.data, null, 2),
+              untrustedBlock('query result', resolved.data),
               '',
               'APPLICATION-COMPUTED ANSWER (already correct; reword it clearly, do not change any number):',
-              resolved.summary,
+              deterministicAnswer,
             ].join('\n'),
           },
         ],
@@ -142,6 +238,7 @@ export async function answerQuestion(input: {
       if (content) {
         answer = content;
         aiUsed = true;
+        promptVersion = CHAT_PROMPT_VERSION;
       }
     } catch (err) {
       logger.warn('chat narration failed, using deterministic answer', {
@@ -150,20 +247,36 @@ export async function answerQuestion(input: {
     }
   }
 
+  // Caveats are appended by the application, not left to the model's wording,
+  // so an uncertainty can never be dropped in narration.
+  if (caveats.length > 0 && aiUsed) {
+    const missing = caveats.filter((c) => !answer.includes(c));
+    if (missing.length > 0) answer = `${answer}\n\n${missing.join(' ')}`;
+  }
+
   return {
     answer,
     intent: classified.intent,
-    data: resolved.data,
+    data: { ...resolved.data, accounting_basis: method },
     dataThrough,
     source,
-    deterministicAnswer: resolved.summary,
+    accountingMethod: method,
+    basisLabel: basisLabel(method),
+    provenance,
+    caveats,
+    deterministicAnswer,
     aiUsed,
+    promptVersion,
   };
 }
 
 interface ResolvedAnswer {
   summary: string;
   data: Record<string, unknown>;
+  /** Metric keys whose provenance should accompany the answer. */
+  provenanceKeys?: string[];
+  /** Uncertainty that must reach the owner regardless of how the model words it. */
+  caveats?: string[];
 }
 
 async function resolveIntent(ctx: {
@@ -210,8 +323,9 @@ async function resolveIntent(ctx: {
     default:
       return {
         summary:
-          'I could not match that question to a supported report. Try asking about revenue, margin, a specific expense category, a vendor, a store, cash, receivables or payables for a given month.',
+          'I could not match that question to a supported report, so I have not answered it rather than guessing. Try asking about revenue, margin, a specific expense category, a vendor, a store, cash, receivables or payables for a given month.',
         data: { intent: 'unknown' },
+        caveats: ['The question did not match a supported query, so no figures were computed.'],
       };
   }
 }
@@ -224,12 +338,25 @@ async function monthSummary(companyId: string, period: Period): Promise<Resolved
   ]);
   if (!current) {
     return {
-      summary: `No stored financial data for ${monthLabel(period)}.`,
+      summary: `I do not have stored financial data for ${monthLabel(period)}, so I cannot report on it. Import that month from QuickBooks and ask again.`,
       data: { period: period.start, available: false },
+      caveats: [`No data is stored for ${monthLabel(period)}.`],
     };
   }
   const mom = prior ? pctChange(current.netSales, prior.netSales) : null;
   const yoy = lastYear ? pctChange(current.netSales, lastYear.netSales) : null;
+
+  const caveats: string[] = [];
+  if (!prior) caveats.push(`No prior month is stored, so the month-over-month change cannot be calculated.`);
+  if (!lastYear) {
+    caveats.push(`${monthLabel(sameMonthLastYear(period))} is not stored, so the year-over-year change cannot be calculated.`);
+  }
+  if (prior && mom === null) {
+    caveats.push('Prior-month revenue was zero, so the percentage change is not meaningful (N/M).');
+  }
+  if (current.netSales === 0) {
+    caveats.push('Revenue for this period is zero, so margins and ratios of revenue are not meaningful (N/M).');
+  }
 
   return {
     summary: [
@@ -238,6 +365,8 @@ async function monthSummary(companyId: string, period: Period): Promise<Resolved
       `Operating expenses ${formatCurrency(current.operatingExpenses)}; net income ${formatCurrency(current.netIncome)}${current.netMargin !== null ? ` (${formatPercent(current.netMargin)} net margin)` : ''}.`,
       `Cash ${formatCurrency(current.cash)}, A/R ${formatCurrency(current.accountsReceivable)}, A/P ${formatCurrency(current.accountsPayable)}.`,
     ].join(' '),
+    provenanceKeys: ['net_sales', 'gross_profit', 'gross_margin', 'operating_expenses', 'net_income', 'cash'],
+    caveats,
     data: {
       period: period.start,
       revenue: current.netSales,
@@ -260,9 +389,11 @@ async function monthSummary(companyId: string, period: Period): Promise<Resolved
 async function comparePeriods(companyId: string, a: Period, b: Period): Promise<ResolvedAnswer> {
   const [ma, mb] = await Promise.all([getMonthlyMetrics(companyId, a), getMonthlyMetrics(companyId, b)]);
   if (!ma || !mb) {
+    const missing = [!ma ? monthLabel(a) : null, !mb ? monthLabel(b) : null].filter(Boolean);
     return {
-      summary: `I do not have stored data for both ${monthLabel(a)} and ${monthLabel(b)}.`,
-      data: { a: a.start, b: b.start, available: false },
+      summary: `I cannot compare those periods: ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not stored. Import the missing month(s) and ask again.`,
+      data: { a: a.start, b: b.start, available: false, missing },
+      caveats: [`${missing.join(' and ')} not stored.`],
     };
   }
   const rows = [
@@ -281,6 +412,8 @@ async function comparePeriods(companyId: string, a: Period, b: Period): Promise<
       ),
       `Gross margin ${formatPercent(ma.grossMargin)} vs ${formatPercent(mb.grossMargin)}.`,
     ].join(' '),
+    provenanceKeys: ['net_sales', 'gross_profit', 'operating_expenses', 'net_income'],
+    caveats: mb.netSales === 0 ? ['The comparison period had zero revenue, so percentage changes are not meaningful (N/M).'] : [],
     data: {
       period_a: a.start,
       period_b: b.start,
@@ -311,9 +444,11 @@ async function expenseDrivers(companyId: string, period: Period): Promise<Resolv
     getMonthlyMetrics(companyId, prior),
   ]);
   if (!current || !previous) {
+    const missing = !current ? monthLabel(period) : monthLabel(prior);
     return {
-      summary: `I need both ${monthLabel(period)} and ${monthLabel(prior)} to explain the change, and one of them is not stored.`,
-      data: { period: period.start, prior_period: prior.start, available: false },
+      summary: `Explaining a change needs both ${monthLabel(period)} and ${monthLabel(prior)}, and ${missing} is not stored. Import it and ask again.`,
+      data: { period: period.start, prior_period: prior.start, available: false, missing },
+      caveats: [`${missing} is not stored, so the change cannot be decomposed.`],
     };
   }
 
@@ -377,6 +512,15 @@ async function expenseDrivers(companyId: string, period: Period): Promise<Resolv
     ]
       .filter(Boolean)
       .join(' '),
+    provenanceKeys: ['net_income', 'net_sales', 'gross_margin', 'operating_expenses'],
+    caveats: [
+      ...(previous.netSales === 0
+        ? ['Prior-month revenue was zero, so percentage changes are not meaningful (N/M).']
+        : []),
+      ...(current.grossMargin === null || previous.grossMargin === null
+        ? ['Gross margin could not be calculated for one of the periods, so the margin effect is excluded from the bridge.']
+        : []),
+    ],
     data: {
       period: period.start,
       prior_period: prior.start,
@@ -412,6 +556,7 @@ async function categoryDetail(
     return {
       summary: 'I could not tell which expense category you meant. Name it explicitly, for example "advertising" or "payroll".',
       data: { category: null },
+      caveats: ['No category was identified in the question.'],
     };
   }
   const ytd = yearToDate(period, fiscalYearStartMonth);
@@ -422,7 +567,14 @@ async function categoryDetail(
   const metrics = await getMonthlyMetrics(companyId, period);
 
   return {
-    summary: `${categoryLabel(categoryKey)} was ${formatCurrency(current)} in ${monthLabel(period)}${metrics ? ` (${formatPercent(safeDivide(current, metrics.netSales))} of revenue)` : ''}, and ${formatCurrency(ytdTotal)} year to date from ${ytd.start}.`,
+    summary:
+      monthly.length === 0
+        ? `No ${categoryLabel(categoryKey)} activity is recorded between ${ytd.start} and ${period.end}. That may mean there was none, or that no account is mapped to ${categoryLabel(categoryKey)}.`
+        : `${categoryLabel(categoryKey)} was ${formatCurrency(current)} in ${monthLabel(period)}${metrics ? ` (${formatPercent(safeDivide(current, metrics.netSales))} of revenue)` : ''}, and ${formatCurrency(ytdTotal)} year to date from ${ytd.start}.`,
+    caveats:
+      monthly.length === 0
+        ? [`No accounts are mapped to ${categoryLabel(categoryKey)}, or the category had no activity.`]
+        : [],
     data: {
       category: categoryLabel(categoryKey),
       category_key: categoryKey,
@@ -444,8 +596,9 @@ async function vendorSpendAnswer(
   const vendors = (await getVendorSpend(companyId, period)).slice(0, limit);
   if (vendors.length === 0) {
     return {
-      summary: `No vendor transactions are stored for ${monthLabel(period)}.`,
+      summary: `No vendor transactions are stored for ${monthLabel(period)}, so I cannot rank vendors for that month.`,
       data: { period: period.start, vendors: [] },
+      caveats: ['Vendor analysis needs transaction detail, which was not imported for this period.'],
     };
   }
   return {
@@ -475,10 +628,27 @@ async function vendorLookup(
   const matches = rows.filter((r) => r.vendorName.toLowerCase().includes(needle));
   if (matches.length === 0) {
     return {
-      summary: `No spend recorded for a vendor matching "${vendorHint}" between ${ytd.start} and ${period.end}.`,
+      summary: `No spend is recorded for a vendor matching "${vendorHint}" between ${ytd.start} and ${period.end}. Check the spelling, or the vendor may be recorded under a different name.`,
       data: { vendor: vendorHint, matched: false },
+      caveats: [`No vendor matching "${vendorHint}" was found in the stored transactions.`],
     };
   }
+
+  // A partial name can match several vendors; say so rather than silently
+  // picking one and reporting its total as if it were the answer.
+  const distinctNames = Array.from(new Set(matches.map((r) => r.vendorName)));
+  if (distinctNames.length > 1) {
+    const totals = distinctNames.map((n) => ({
+      vendor: n,
+      ytd_amount: round2(matches.filter((r) => r.vendorName === n).reduce((a, r) => a + r.amount, 0)),
+    }));
+    return {
+      summary: `"${vendorHint}" matches ${distinctNames.length} vendors: ${totals.map((t) => `${t.vendor} ${formatCurrency(t.ytd_amount)} year to date`).join('; ')}. Ask again with the full name for a single vendor.`,
+      data: { vendor_query: vendorHint, ambiguous: true, matches: totals, ytd_start: ytd.start },
+      caveats: [`"${vendorHint}" is ambiguous — ${distinctNames.length} vendors match.`],
+    };
+  }
+
   const name = matches[0]?.vendorName ?? vendorHint;
   const monthAmount = matches.find((r) => r.periodStart === period.start)?.amount ?? 0;
   const ytdAmount = round2(matches.reduce((a, r) => a + r.amount, 0));
@@ -507,10 +677,13 @@ async function storePerformance(
   if (current.length === 0) {
     return {
       summary:
-        'This QuickBooks company has no Location or Class breakdown stored for that month, so store-level results are not available.',
+        'This QuickBooks company has no Location or Class breakdown stored for that month, so store-level results are not available. Enable Locations or Classes in QuickBooks and re-sync to get them.',
       data: { period: period.start, stores: [] },
+      caveats: ['No location or class data exists for this period.'],
     };
   }
+
+  const silentStores = current.filter((s) => s.netSales === 0);
   const ranked = rankStores(current, prior, lastYear);
   const wantsPayroll = /payroll/i.test(classified.storeHint ?? '') || classified.categoryHint === 'payroll';
   const byPayroll = [...ranked].sort((a, b) => (b.payrollPct ?? 0) - (a.payrollPct ?? 0));
@@ -523,6 +696,12 @@ async function storePerformance(
 
   return {
     summary,
+    caveats: [
+      'Store figures are contribution before corporate overhead; shared costs are not allocated.',
+      ...(silentStores.length > 0
+        ? [`${silentStores.map((s) => s.dimensionName).join(', ')} recorded no revenue this period, so percentage comparisons for ${silentStores.length > 1 ? 'those stores' : 'that store'} are not meaningful.`]
+        : []),
+    ],
     data: {
       period: period.start,
       note: 'Shared corporate overhead is not allocated to stores.',
@@ -567,8 +746,9 @@ async function cashAnswer(companyId: string, period: Period): Promise<ResolvedAn
   ]);
   if (!current || current.cash === null) {
     return {
-      summary: `No verified cash balance is stored for ${monthLabel(period)}.`,
+      summary: `No verified cash balance is stored for ${monthLabel(period)}. A cash figure needs a Balance Sheet for that period, which was not captured.`,
       data: { period: period.start, cash: null },
+      caveats: ['No Balance Sheet is stored for this period, so cash cannot be reported.'],
     };
   }
   const change = prior?.cash != null ? round2(current.cash - prior.cash) : null;
@@ -582,6 +762,11 @@ async function cashAnswer(companyId: string, period: Period): Promise<ResolvedAn
     ]
       .filter(Boolean)
       .join(' '),
+    provenanceKeys: ['cash', 'net_income'],
+    caveats:
+      prior?.cash == null
+        ? ['No prior-month cash balance is stored, so the change in cash cannot be calculated.']
+        : [],
     data: {
       period: period.start,
       ending_cash: current.cash,
@@ -602,8 +787,9 @@ async function agingAnswer(
   const aging = await getAging(companyId, kind, period.end);
   if (!aging) {
     return {
-      summary: `No ${kind === 'receivable' ? 'receivables' : 'payables'} aging is stored as of ${period.end}.`,
+      summary: `No ${kind === 'receivable' ? 'receivables' : 'payables'} aging is stored as of ${period.end}, so I cannot break the balance down by age.`,
       data: { as_of: period.end, available: false },
+      caveats: [`QuickBooks returned no ${kind} aging report for this period.`],
     };
   }
   const label = kind === 'receivable' ? 'Receivables' : 'Payables';
@@ -693,15 +879,21 @@ async function yearComparison(
   const current = aggregateMetrics(ytdRows, ytd);
   const previous = aggregateMetrics(pytdRows, pytd);
   if (!current) {
-    return { summary: 'No year-to-date data is stored yet.', data: { available: false } };
+    return {
+      summary: 'No months of the current fiscal year are stored, so there is no year-to-date figure to report.',
+      data: { available: false },
+      caveats: ['No year-to-date data is stored.'],
+    };
   }
   return {
     summary: [
       `Year to date (${ytd.start} to ${ytd.end}): revenue ${formatCurrency(current.netSales)}, gross profit ${formatCurrency(current.grossProfit)} (${formatPercent(current.grossMargin)}), net income ${formatCurrency(current.netIncome)}.`,
       previous
         ? `Prior year to date: revenue ${formatCurrency(previous.netSales)} (${formatPercent(pctChange(current.netSales, previous.netSales), 1, { signed: true })}), net income ${formatCurrency(previous.netIncome)}.`
-        : 'No comparable prior-year period is stored.',
+        : 'No comparable prior-year period is stored, so the year-over-year comparison cannot be calculated.',
     ].join(' '),
+    provenanceKeys: ['net_sales', 'gross_profit', 'net_income'],
+    caveats: previous ? [] : ['The prior-year period is not stored, so no year-over-year change is available.'],
     data: {
       ytd_start: ytd.start,
       ytd_end: ytd.end,

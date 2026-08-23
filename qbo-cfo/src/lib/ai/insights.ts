@@ -1,11 +1,13 @@
 import { AppError } from '../errors';
 import { logger } from '../logger';
+import { event } from '../observability';
 import type { AiInsight, Severity } from '../finance/types';
 import type { ReportPayload } from '../reports/types';
 import { aiModelName, structuredCompletion } from './client';
 import { buildAiContext } from './context';
 import { CFO_SYSTEM_PROMPT, INSIGHTS_SCHEMA } from './prompts';
 import { isOpenAiConfigured } from '../env';
+import { AI_PROMPT_VERSION, DETERMINISTIC_PROMPT_VERSION } from '../version';
 
 interface RawInsightResponse {
   executive_summary: string;
@@ -88,9 +90,38 @@ export interface InsightResult {
   insights: AiInsight[];
   executiveSummary: string;
   model: string;
+  /** Recorded on the report version for auditability. */
+  promptVersion: string;
   aiUsed: boolean;
   droppedCount: number;
+  /** Insights removed because their category's mapping coverage is too poor. */
+  suppressedForCoverage: number;
   warning: string | null;
+}
+
+/**
+ * Removes insights about categories whose mapping coverage is too low to
+ * support a conclusion. An advertising insight is worthless -- worse, actively
+ * misleading -- when a third of advertising-like spend never reached the
+ * Advertising category.
+ */
+export function filterLowCoverageInsights(
+  insights: AiInsight[],
+  restrictedCategories: string[],
+  categoryLabels: Map<string, string>,
+): { kept: AiInsight[]; suppressed: AiInsight[] } {
+  if (restrictedCategories.length === 0) return { kept: insights, suppressed: [] };
+  const restrictedLabels = restrictedCategories.map(
+    (k) => (categoryLabels.get(k) ?? k).toLowerCase(),
+  );
+  const kept: AiInsight[] = [];
+  const suppressed: AiInsight[] = [];
+  for (const insight of insights) {
+    const haystack = `${insight.category} ${insight.observation}`.toLowerCase();
+    if (restrictedLabels.some((label) => haystack.includes(label))) suppressed.push(insight);
+    else kept.push(insight);
+  }
+  return { kept, suppressed };
 }
 
 /**
@@ -102,13 +133,19 @@ export async function generateInsights(report: ReportPayload): Promise<InsightRe
   const context = buildAiContext(report);
   const fallbackSummary = report.observations.join(' ');
 
+  const categoryLabels = new Map(
+    report.mappingCoverage.byCategory.map((c) => [c.categoryKey, c.label]),
+  );
+
   if (!isOpenAiConfigured()) {
     return {
       insights: fallbackInsights(report),
       executiveSummary: fallbackSummary,
       model: 'deterministic',
+      promptVersion: DETERMINISTIC_PROMPT_VERSION,
       aiUsed: false,
       droppedCount: 0,
+      suppressedForCoverage: 0,
       warning: 'OPENAI_API_KEY is not configured, so the report uses application-computed commentary only.',
     };
   }
@@ -137,11 +174,26 @@ export async function generateInsights(report: ReportPayload): Promise<InsightRe
       confidence: i.confidence,
     }));
 
-    const { kept, dropped } = filterHallucinatedInsights(mapped, context.allowedFigures);
+    const { kept: verified, dropped } = filterHallucinatedInsights(mapped, context.allowedFigures);
     if (dropped.length > 0) {
-      logger.warn('dropped AI insights citing unverified figures', {
-        droppedCount: dropped.length,
+      event('ai.output_rejected', {
         companyId: report.companyId,
+        period: report.period.start,
+        count: dropped.length,
+        reason: 'insight cited an amount not present in the verified context',
+      });
+    }
+
+    const { kept, suppressed } = filterLowCoverageInsights(
+      verified,
+      context.restrictedCategories,
+      categoryLabels,
+    );
+    if (suppressed.length > 0) {
+      logger.warn('suppressed AI insights for poor mapping coverage', {
+        suppressedCount: suppressed.length,
+        companyId: report.companyId,
+        categories: context.restrictedCategories,
       });
     }
 
@@ -151,25 +203,42 @@ export async function generateInsights(report: ReportPayload): Promise<InsightRe
     const allowed = new Set(Array.from(context.allowedFigures).map(normaliseFigure));
     const summaryValid = summaryFigures.every((f) => allowed.has(f));
 
+    const warnings: string[] = [];
+    if (!summaryValid) {
+      warnings.push(
+        'The AI summary referenced figures not present in the verified data and was replaced with the application-computed summary.',
+      );
+    }
+    if (dropped.length > 0) {
+      warnings.push(`${dropped.length} AI insight(s) were dropped for citing unverified amounts.`);
+    }
+    if (suppressed.length > 0) {
+      warnings.push(
+        `${suppressed.length} AI insight(s) were withheld because mapping coverage for ${context.restrictedCategories.join(', ')} is too low to support a conclusion.`,
+      );
+    }
+
     return {
       insights: kept.length > 0 ? kept : fallbackInsights(report),
       executiveSummary: summaryValid ? raw.executive_summary : fallbackSummary,
       model: aiModelName(),
+      promptVersion: AI_PROMPT_VERSION,
       aiUsed: true,
       droppedCount: dropped.length,
-      warning: summaryValid
-        ? null
-        : 'The AI summary referenced figures not present in the verified data and was replaced with the application-computed summary.',
+      suppressedForCoverage: suppressed.length,
+      warning: warnings.length > 0 ? warnings.join(' ') : null,
     };
   } catch (err) {
     const message = err instanceof AppError ? err.message : 'AI analysis failed';
-    logger.warn('falling back to deterministic insights', { message });
+    event('ai.failed', { companyId: report.companyId, period: report.period.start, reason: message });
     return {
       insights: fallbackInsights(report),
       executiveSummary: fallbackSummary,
       model: 'deterministic',
+      promptVersion: DETERMINISTIC_PROMPT_VERSION,
       aiUsed: false,
       droppedCount: 0,
+      suppressedForCoverage: 0,
       warning: `${message} The report was completed using application-computed commentary.`,
     };
   }

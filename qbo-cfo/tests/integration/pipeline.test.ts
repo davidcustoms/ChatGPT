@@ -9,7 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * not configured, so `npm test` stays green on a machine without a database.
  */
 
-const HAS_DB = Boolean(process.env['DATABASE_URL']);
+const HAS_DB =
+  Boolean(process.env['DATABASE_URL']) && process.env['DATABASE_URL_IS_PLACEHOLDER'] !== '1';
 const suite = HAS_DB ? describe : describe.skip;
 
 // A key is required to encrypt tokens; tests never touch real Intuit tokens.
@@ -79,7 +80,9 @@ suite('end-to-end pipeline', () => {
 
   it('produces a balanced, internally consistent report payload', async () => {
     const { buildReportPayload } = await import('@/lib/reports/builder');
-    const payload = await buildReportPayload({ companyId, period });
+    const { payload, source } = await buildReportPayload({ companyId, period });
+    expect(source.fingerprint).toHaveLength(64);
+    expect(source.snapshotIds.length).toBeGreaterThan(0);
 
     expect(payload.metrics.balanceSheetBalanced).toBe(true);
     // Net sales must reconcile with gross sales less contra revenue.

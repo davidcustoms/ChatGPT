@@ -19,6 +19,7 @@ import type { QboReport } from '@/lib/qbo/report-types';
 const ENABLED =
   process.env['QBO_SANDBOX_TESTS'] === '1' &&
   Boolean(process.env['DATABASE_URL']) &&
+  process.env['DATABASE_URL_IS_PLACEHOLDER'] !== '1' &&
   Boolean(process.env['INTUIT_CLIENT_ID']) &&
   Boolean(process.env['INTUIT_CLIENT_SECRET']);
 

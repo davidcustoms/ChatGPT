@@ -1,4 +1,5 @@
 import type { Period } from '../util/dates';
+import type { AccountingMethod } from './basis';
 
 /** A QuickBooks account as mirrored locally. */
 export interface AccountRecord {
@@ -30,6 +31,8 @@ export interface AccountAmount {
 export interface MonthlyMetrics {
   companyId: string;
   period: Period;
+  /** The basis these figures were produced on. Never mixed within a report. */
+  accountingMethod: AccountingMethod;
 
   grossSales: number;
   discounts: number;

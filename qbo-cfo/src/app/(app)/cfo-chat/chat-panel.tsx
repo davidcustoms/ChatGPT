@@ -7,6 +7,16 @@ import { Textarea } from '@/components/ui/field';
 import { ErrorNotice } from '@/components/ui/states';
 import { Badge } from '@/components/ui/badge';
 
+interface ProvenanceEntry {
+  metricKey: string;
+  label: string;
+  value: number | null;
+  formula: string;
+  sourceReport: string | null;
+  period: { start: string; end: string };
+  basis: string;
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -14,6 +24,9 @@ interface Message {
   intent?: string;
   dataThrough?: string | null;
   source?: string;
+  basisLabel?: string;
+  caveats?: string[];
+  provenance?: ProvenanceEntry[];
   data?: Record<string, unknown>;
 }
 
@@ -28,11 +41,13 @@ export function ChatPanel({
   suggestions,
   dataThrough,
   source,
+  basis,
 }: {
   companyId: string;
   suggestions: string[];
   dataThrough: string | null;
   source: string;
+  basis: string;
 }) {
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [input, setInput] = React.useState('');
@@ -64,6 +79,9 @@ export function ChatPanel({
         intent?: string;
         dataThrough?: string | null;
         source?: string;
+        basis?: { method: string; label: string };
+        caveats?: string[];
+        provenance?: ProvenanceEntry[];
         data?: Record<string, unknown>;
         conversationId?: string;
       };
@@ -81,6 +99,9 @@ export function ChatPanel({
           intent: data.intent,
           dataThrough: data.dataThrough ?? null,
           source: data.source,
+          basisLabel: data.basis?.label,
+          caveats: data.caveats ?? [],
+          provenance: data.provenance ?? [],
           data: data.data,
         },
       ]);
@@ -101,7 +122,7 @@ export function ChatPanel({
                 <p className="text-sm font-medium text-ink">Ask a question about your accounting data</p>
                 <p className="mt-1 text-xs text-ink-muted">
                   Answers are computed from your stored {source} data — never from the model&apos;s memory. Data
-                  through {dataThrough ?? '—'}.
+                  through {dataThrough ?? '—'} on a {basis.toLowerCase()}.
                 </p>
               </div>
             ) : null}
@@ -117,12 +138,44 @@ export function ChatPanel({
                 <div key={m.id} className="flex justify-start">
                   <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-border bg-surface px-4 py-3">
                     <p className="whitespace-pre-wrap text-sm text-ink">{m.content}</p>
+
+                    {m.caveats && m.caveats.length > 0 ? (
+                      <ul className="mt-2 space-y-1 rounded border border-warning/25 bg-warning-soft px-3 py-2 text-[11px] text-warning">
+                        {m.caveats.map((c, i) => (
+                          <li key={i}>{c}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2 text-[11px] text-ink-subtle">
                       <span>Data through: {m.dataThrough ?? '—'}</span>
                       <span aria-hidden="true">·</span>
                       <span>Source: {m.source}</span>
+                      {m.basisLabel ? (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <Badge variant="navy">{m.basisLabel}</Badge>
+                        </>
+                      ) : null}
                       {m.intent ? <Badge variant="outline">{m.intent.replace(/_/g, ' ')}</Badge> : null}
                     </div>
+
+                    {m.provenance && m.provenance.length > 0 ? (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[11px] text-navy-700 hover:underline">
+                          How were these figures calculated?
+                        </summary>
+                        <ul className="mt-1 space-y-1 text-[11px] text-ink-muted">
+                          {m.provenance.map((p) => (
+                            <li key={p.metricKey}>
+                              <span className="font-medium text-ink">{p.label}</span>: {p.formula} · source{' '}
+                              {p.sourceReport ?? 'stored metrics'} · {p.period.start} to {p.period.end} ·{' '}
+                              {p.basis} basis
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
                     {m.data && Object.keys(m.data).length > 0 ? (
                       <details className="mt-2">
                         <summary className="cursor-pointer text-[11px] text-navy-700 hover:underline">

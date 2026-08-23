@@ -14,6 +14,7 @@ const schema = z.object({
   trackingDimension: z.enum(['auto', 'location', 'class', 'none']).optional(),
   materialityAmount: z.number().min(0).max(10_000_000).optional(),
   materialityPct: z.number().min(0).max(1).optional(),
+  accountingMethod: z.enum(['Accrual', 'Cash']).optional(),
 });
 
 export async function POST(request: Request) {
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
       ...(body.trackingDimension ? { trackingDimension: body.trackingDimension } : {}),
       ...(body.materialityAmount !== undefined ? { materialityAmount: body.materialityAmount } : {}),
       ...(body.materialityPct !== undefined ? { materialityPct: body.materialityPct } : {}),
+      ...(body.accountingMethod ? { accountingMethod: body.accountingMethod } : {}),
     });
     await recordAudit({
       companyId: company.id,

@@ -11,6 +11,7 @@ import { exchangeCodeForTokens } from '@/lib/qbo/oauth';
 import { QuickBooksClient } from '@/lib/qbo/client';
 import { fetchCompanyInfo } from '@/lib/qbo/entities';
 import { logger } from '@/lib/logger';
+import { event } from '@/lib/observability';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,7 +54,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       outcome: 'failure',
       metadata: { realmId },
     });
-    logger.warn('rejected quickbooks callback with invalid state', { realmId });
+    event('oauth.state_rejected', { realmId, reason: 'state missing, expired or already consumed' });
     return redirectWith('/settings/quickbooks', {
       error:
         'The QuickBooks authorisation link has expired or was already used. Please start the connection again.',
@@ -106,12 +107,14 @@ export async function GET(request: Request): Promise<NextResponse> {
       metadata: { realmId, environment: env().INTUIT_ENVIRONMENT },
     });
 
+    event('oauth.completed', { companyId, realmId, environment: env().INTUIT_ENVIRONMENT });
     return redirectWith(consumed.redirectTo ?? '/settings/quickbooks', {
       connected: '1',
       company: companyId,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Token exchange failed';
+    event('oauth.failed', { realmId, reason: message });
     await recordAudit({
       companyId: consumed.companyId,
       userId: consumed.userId,

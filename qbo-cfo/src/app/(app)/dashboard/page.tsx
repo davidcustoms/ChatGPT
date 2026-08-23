@@ -5,6 +5,7 @@ import { getAnomalies } from '@/lib/db/repositories/anomalies';
 import { getAging, getLocationMetrics, getMetricsRange, getMonthlyMetrics } from '@/lib/db/repositories/metrics';
 import { categoryTotalsByPeriod } from '@/lib/db/repositories/metrics';
 import { getReportForPeriod } from '@/lib/db/repositories/reports';
+import { basisDescription, basisLabel } from '@/lib/finance/basis';
 import { aggregateMetrics } from '@/lib/finance/comparisons';
 import { computeKpis } from '@/lib/finance/kpi';
 import { categoryLabel, CATEGORY_BY_KEY } from '@/lib/finance/categories';
@@ -25,6 +26,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard } from '@/components/ui/metric';
 import { EmptyState } from '@/components/ui/states';
 import { PageHeader, DataProvenance } from '@/components/layout/page-header';
+import { BasisBadge } from '@/components/report/basis-badge';
+import { MetricProvenance } from '@/components/report/metric-provenance';
 import { PeriodPicker } from '@/components/layout/period-picker';
 import { NoDataState } from '@/components/layout/no-data';
 import { TrendChart } from '@/components/charts/trend-chart';
@@ -65,6 +68,7 @@ export default async function DashboardPage({
   const company = ctx.company;
   const period = ctx.period;
   const compare = param(sp, 'compare') ?? 'mom';
+  const periodKey = period.start.slice(0, 7);
 
   const prior = priorMonth(period);
   const lastYear = sameMonthLastYear(period);
@@ -183,7 +187,16 @@ export default async function DashboardPage({
     <>
       <PageHeader
         title={`${monthLabel(period)} overview`}
-        description={<DataProvenance dataThrough={ctx.dataThrough} source={ctx.sourceLabel} />}
+        description={
+          <div className="flex flex-wrap items-center gap-2">
+            <DataProvenance dataThrough={ctx.dataThrough} source={ctx.sourceLabel} />
+            <BasisBadge
+              method={company.accountingMethod}
+              label={basisLabel(company.accountingMethod)}
+              description={basisDescription(company.accountingMethod)}
+            />
+          </div>
+        }
         actions={
           <>
             <PeriodPicker periods={ctx.availablePeriods} active={period.start.slice(0, 7)} />
@@ -207,17 +220,42 @@ export default async function DashboardPage({
       </div>
 
       <section aria-label="Key metrics" className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
-        <MetricCard label="Revenue" value={view.netSales} changePct={revenueChange.pct} comparisonLabel={comparisonLabel} />
-        <MetricCard label="Gross Profit" value={view.grossProfit} changePct={gpChange.pct} comparisonLabel={comparisonLabel} />
+        <MetricCard
+          label="Revenue"
+          value={view.netSales}
+          changePct={revenueChange.pct}
+          comparisonLabel={comparisonLabel}
+          footer={<MetricProvenance companyId={company.id} period={periodKey} metricKey="net_sales" currency={company.currencyCode} />}
+        />
+        <MetricCard
+          label="Gross Profit"
+          value={view.grossProfit}
+          changePct={gpChange.pct}
+          comparisonLabel={comparisonLabel}
+          footer={<MetricProvenance companyId={company.id} period={periodKey} metricKey="gross_profit" currency={company.currencyCode} />}
+        />
         <MetricCard
           label="Gross Margin"
           value={view.grossMargin}
           format="percent"
           changePoints={baseline?.grossMargin != null && view.grossMargin != null ? view.grossMargin - baseline.grossMargin : null}
           comparisonLabel={comparisonLabel}
+          footer={<MetricProvenance companyId={company.id} period={periodKey} metricKey="gross_margin" currency={company.currencyCode} />}
         />
-        <MetricCard label="Net Income" value={view.netIncome} changePct={niChange.pct} comparisonLabel={comparisonLabel} />
-        <MetricCard label="Cash" value={view.cash} changePct={cashChange.pct} comparisonLabel={comparisonLabel} />
+        <MetricCard
+          label="Net Income"
+          value={view.netIncome}
+          changePct={niChange.pct}
+          comparisonLabel={comparisonLabel}
+          footer={<MetricProvenance companyId={company.id} period={periodKey} metricKey="net_income" currency={company.currencyCode} />}
+        />
+        <MetricCard
+          label="Cash"
+          value={view.cash}
+          changePct={cashChange.pct}
+          comparisonLabel={comparisonLabel}
+          footer={<MetricProvenance companyId={company.id} period={periodKey} metricKey="cash" currency={company.currencyCode} />}
+        />
         <MetricCard
           label="Accounts Receivable"
           value={view.accountsReceivable}
