@@ -290,11 +290,12 @@ rather than a verdict.
 | Needs Review | 60-74 | Something should be fixed before relying on this |
 | Low Confidence | Below 60 | Do not make a decision on these figures without fixing the deductions |
 
-Ten factors can remove points, capped at the maximum shown:
+Eleven factors can remove points, capped at the maximum shown:
 
 | Factor | Max | What removes points |
 |---|---:|---|
 | Report availability | 40 | A missing Profit & Loss |
+| Ties to QuickBooks | 30 | A reported total that does not equal QuickBooks' own subtotal |
 | Mapping coverage | 25 | Income and expense dollars not mapped to a management category |
 | Balance sheet integrity | 15 | Assets not equal to liabilities plus equity |
 | Period incomplete | 12 | The month is not closed |
@@ -308,9 +309,14 @@ Ten factors can remove points, capped at the maximum shown:
 The maxima sum to more than 100 by design: a report can be wrong in several ways
 at once, and the score should reach the bottom band when it is.
 
-**With no Profit & Loss the score is capped at 20** regardless of what else is
-clean. Without an income statement there is no report, and a "Needs Review"
-badge on nothing would be misleading.
+Two findings **cap the score at 20** regardless of how clean everything else is:
+
+- **No Profit & Loss.** Without an income statement there is no report, and a
+  "Needs Review" badge on nothing would be misleading.
+- **The report does not tie to QuickBooks.** A report whose own totals differ
+  from the source is not a needs-review report — its figures are wrong. Without
+  the cap, an otherwise perfect report that was $1,250 out would still have
+  scored 70 and read "Needs Review".
 
 A report stored before the score existed carries the band `unknown` and reads
 "Not scored". It is never backfilled with a zero, which would read as a verdict
@@ -355,10 +361,24 @@ a caveat cannot be softened or dropped in narration.
 
 ## Reconciliation
 
-`npm run reconcile` compares every headline total against QuickBooks' own
-subtotal rows, read straight from the stored raw snapshot rather than through
-the application's classification logic — so agreement is a genuine check, not a
-restatement of the same computation.
+Reconciliation happens in two places.
+
+**On every report build.** Net revenue, COGS, gross profit, operating expenses
+and net income are compared against QuickBooks' own subtotal rows in the stored
+Profit & Loss snapshot. It costs no I/O — the builder already holds the
+snapshot — and it appears on the close checklist as *Ties to QuickBooks*, with
+a failure capping the confidence score.
+
+This matters because the metric engine takes some totals from QuickBooks'
+subtotals and derives net revenue from its own line classification. When those
+agree, gross margin is a consistent ratio. When they disagree, it is a
+QuickBooks numerator over an application denominator, and without this check
+nobody would be told.
+
+**On demand, in more depth.** `npm run reconcile` compares every headline total
+including the balance sheet and the accounting identity, read straight from the
+stored raw snapshot rather than through the application's classification logic
+— so agreement is a genuine check, not a restatement of the same computation.
 
 Tolerance is half a cent. A difference is a bug in the data transformation and
 must be fixed there; widening the tolerance is not a fix. The current run is in

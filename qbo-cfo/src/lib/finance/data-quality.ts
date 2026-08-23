@@ -47,6 +47,16 @@ export interface QualityInput {
   oldReceivables90Plus: number | null;
   oldPayables90Plus: number | null;
   today?: Date;
+  /**
+   * Whether the reported totals tie to QuickBooks' own subtotals. `null` or
+   * omitted means the comparison could not be made.
+   */
+  statementTieOut?: {
+    ok: boolean;
+    worstDifference: number;
+    compared: number;
+    mismatches: Array<{ metric: string; app: number; quickbooks: number; difference: number }>;
+  } | null;
   /** Scoring inputs. Supplied by the report builder; defaults keep older callers working. */
   scoring?: Partial<ScoreInput>;
 }
@@ -66,6 +76,31 @@ export function evaluateDataQuality(input: QualityInput): QualityReport {
           action: { label: 'Sync QuickBooks', href: '/settings/quickbooks' },
         },
   );
+
+  // The strongest check in the list: do our numbers equal QuickBooks' numbers?
+  const tie = input.statementTieOut ?? null;
+  if (tie && tie.compared > 0) {
+    checks.push(
+      tie.ok
+        ? {
+            key: 'ties_to_quickbooks',
+            label: 'Ties to QuickBooks',
+            status: 'pass',
+            message: `All ${tie.compared} income-statement totals match QuickBooks' own subtotals to the cent.`,
+          }
+        : {
+            key: 'ties_to_quickbooks',
+            label: 'Ties to QuickBooks',
+            status: 'fail',
+            message: `${tie.mismatches
+              // Cents, always: a reconciliation message reading "differs by
+              // $0" for a one-cent break would look like the check is broken.
+              .map((x) => `${x.metric} differs by ${formatCurrency(x.difference, { decimals: 2 })}`)
+              .join('; ')}. The figures in this report do not match QuickBooks and should not be relied on until the difference is explained.`,
+            action: { label: 'Re-sync this month', href: '/settings/quickbooks' },
+          },
+    );
+  }
 
   if (m?.balanceSheetBalanced === null || m?.balanceSheetBalanced === undefined) {
     checks.push({
@@ -246,6 +281,11 @@ export function evaluateDataQuality(input: QualityInput): QualityReport {
     periodIsIncomplete: incomplete,
     // The report builder supplies richer values; anything it passes wins.
     ...input.scoring,
+    // Except the tie-out, which has its own dedicated field so a caller
+    // cannot leave the most severe check out of the score by omission.
+    statementTieOut: tie
+      ? { ok: tie.ok, worstDifference: tie.worstDifference, compared: tie.compared }
+      : null,
   });
 
   return {

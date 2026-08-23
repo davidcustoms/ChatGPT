@@ -5,9 +5,10 @@ import { accountIndex } from '../db/repositories/masterdata';
 import { AppError } from '../errors';
 import { round2 } from '../finance/math';
 import type { AccountingMethod } from '../finance/basis';
+import type { MonthlyMetrics } from '../finance/types';
 import { flattenReport, summaryByGroup, summaryByLabel } from '../qbo/parse';
 import { parseBalanceSheet } from '../qbo/statements';
-import type { QboReport } from '../qbo/report-types';
+import type { FlatReport, QboReport } from '../qbo/report-types';
 import type { Period } from '../util/dates';
 
 /**
@@ -69,6 +70,57 @@ function compare(
     status: Math.abs(difference) < TOLERANCE ? 'MATCH' : 'DIFFERS',
     note,
   };
+}
+
+export interface TieOut {
+  /** True when every comparable income-statement total matched to the cent. */
+  ok: boolean;
+  /** The largest absolute difference found, in dollars. */
+  worstDifference: number;
+  /** Totals that did not tie, for the message shown to the owner. */
+  mismatches: Array<{ metric: string; app: number; quickbooks: number; difference: number }>;
+  /** How many totals could actually be compared. Zero means nothing was checked. */
+  compared: number;
+}
+
+/**
+ * Ties the stored metrics for a period against QuickBooks' own subtotal rows
+ * in the already-loaded Profit & Loss snapshot.
+ *
+ * This is the reconciliation check, run inside every report build rather than
+ * only when someone remembers to run the script. It matters because the metric
+ * engine takes some totals from QuickBooks' subtotals and derives net revenue
+ * from its own line classification: if those two ever disagree, gross margin is
+ * a QuickBooks numerator over an application denominator, and the owner would
+ * never be told.
+ *
+ * Cheap by construction -- it reads a report the builder already has in memory
+ * and does no I/O.
+ */
+export function tieOutToSnapshot(flat: FlatReport, metrics: MonthlyMetrics): TieOut {
+  const pairs: Array<[string, number, number | null]> = [
+    ['Net revenue', metrics.netSales, summaryByGroup(flat, 'Income') ?? summaryByLabel(flat, 'Total Income')],
+    ['Cost of goods sold', metrics.cogs, summaryByGroup(flat, 'COGS') ?? summaryByLabel(flat, 'Total Cost of Goods Sold')],
+    ['Gross profit', metrics.grossProfit, summaryByGroup(flat, 'GrossProfit') ?? summaryByLabel(flat, 'Gross Profit')],
+    ['Operating expenses', metrics.operatingExpenses, summaryByGroup(flat, 'Expenses') ?? summaryByLabel(flat, 'Total Expenses')],
+    ['Net income', metrics.netIncome, summaryByGroup(flat, 'NetIncome') ?? summaryByLabel(flat, 'Net Income')],
+  ];
+
+  const mismatches: TieOut['mismatches'] = [];
+  let compared = 0;
+  let worstDifference = 0;
+
+  for (const [metric, app, quickbooks] of pairs) {
+    if (quickbooks === null) continue;
+    compared += 1;
+    const difference = round2(app - quickbooks);
+    if (Math.abs(difference) > TOLERANCE) {
+      mismatches.push({ metric, app, quickbooks, difference });
+    }
+    worstDifference = Math.max(worstDifference, Math.abs(difference));
+  }
+
+  return { ok: mismatches.length === 0, worstDifference: round2(worstDifference), mismatches, compared };
 }
 
 export async function reconcilePeriod(input: {

@@ -107,6 +107,8 @@ and documented. `docs/PRODUCTION_CHECKLIST.md` is the path from here to yes.
 - AI prompt versioning (`cfo_system_prompt_v1.0`, `cfo_chat_prompt_v1.0`, `deterministic_v1.0`) stored on every insight and chat message
 - Cross-process sync locking (`sync_locks` plus advisory locks) so two schedulers cannot sync one company-month at once; schema application is serialised the same way
 - Batched, idempotent transaction upsert — the same month synced ten times produces byte-identical stored rows
+- Tie-out to QuickBooks on every report build: net revenue, COGS, gross profit, operating expenses and net income compared against QuickBooks' own subtotal rows, with a break capping the confidence score at 20
+- Calendar dates never become timezone-bearing values: DATE columns are read as strings, and the test suite runs east of UTC so a regression fails immediately
 - `/api/health`: app, database, scheduler, QuickBooks and AI status as booleans and versions, `503` when the database is unreachable, no secret in the response
 - Typed operational event vocabulary (`oauth.*`, `qbo.*`, `sync.*`, `report.*`, `ai.*`, `scheduler.*`)
 - Structural prompt-injection defence: QuickBooks fields are neutralised, JSON-encoded, length-capped and emitted only inside a labelled data block; injection-looking values are logged for operators and shown unaltered to the owner
@@ -117,7 +119,7 @@ and documented. `docs/PRODUCTION_CHECKLIST.md` is the path from here to yes.
 - Source traceability: drill-down from a category total to accounts, transactions and QuickBooks ids
 - Audit log for connections, syncs, mapping changes, report generation and exports
 - Typed error taxonomy with retryability and user-facing recovery guidance
-- 389 tests: unit, mock-dataset, database integration, security, prompt injection, export QA, legacy-payload compatibility, and an Intuit sandbox suite
+- 409 tests: unit, mock-dataset, database integration, security, prompt injection, export QA, legacy-payload compatibility, timezone safety, and an Intuit sandbox suite
 
 ---
 
@@ -173,7 +175,7 @@ instance. Nothing below is an estimate.
 
 - `npm run typecheck` — clean under strict TypeScript with `noUncheckedIndexedAccess`
 - `npm run build` — production build succeeds
-- `npm test` — **385 passed, 4 skipped** (the skips are the Intuit sandbox suite,
+- `npm test` — **405 passed, 4 skipped** (the skips are the Intuit sandbox suite,
   which needs live credentials). Run four consecutive times with no flake
 
 Suites that specifically back the gates above:
@@ -187,6 +189,8 @@ Suites that specifically back the gates above:
 | `tests/integration/security.test.ts` | Cross-tenant access, IDOR, OAuth replay and expiry, session hashing, SQL injection, cron authentication, plus static sweeps for unguarded routes, client-side secrets and raw HTML |
 | `tests/exports.test.ts` | The PDF's actual page text and the workbook's actual cell values and formats |
 | `tests/legacy-payloads.test.ts` | A report stored under an older payload shape still opens, exports, and shows its missing fields as missing rather than as zeros |
+| `tests/integration/timezone.test.ts` | Calendar dates survive a round trip through the database unshifted. Every assertion fails against the pre-fix code under TZ=Asia/Tokyo |
+| `tests/tie-out.test.ts` | The report's own totals are compared against QuickBooks' subtotals on every build, and a break caps the confidence score |
 
 ### Manual and harness runs
 

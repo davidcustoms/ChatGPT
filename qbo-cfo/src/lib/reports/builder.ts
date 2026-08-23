@@ -37,6 +37,7 @@ import { isUncategorizedAccount } from '../finance/transaction-review';
 import type { MonthlyMetrics } from '../finance/types';
 import { buildProvenanceIndex } from './provenance';
 import { flattenReport, summaryByLabel } from '../qbo/parse';
+import { tieOutToSnapshot, type TieOut } from './reconcile';
 import type { QboReport } from '../qbo/report-types';
 import {
   addMonths,
@@ -285,9 +286,24 @@ export async function buildReportPayload(input: {
           ? 'partial'
           : 'completed';
 
+  // Does this report's own arithmetic still equal QuickBooks' arithmetic?
+  // Run on every build rather than only when someone runs the script, because
+  // a report that does not tie is the one thing an owner must not act on.
+  const pnlSnapshot = await getSnapshot<QboReport>(
+    companyId,
+    'ProfitAndLoss',
+    period,
+    'total',
+    company.accountingMethod,
+  );
+  const tieOut: TieOut | null = pnlSnapshot
+    ? tieOutToSnapshot(flattenReport(pnlSnapshot.payload), metrics)
+    : null;
+
   const quality = evaluateDataQuality({
     period,
     metrics,
+    statementTieOut: tieOut,
     expectedCompanyName: company.name,
     connectedCompanyName: connection?.companyName ?? null,
     unmappedExpenseAccountCount: unmappedCount,

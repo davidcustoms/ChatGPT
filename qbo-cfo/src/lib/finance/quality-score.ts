@@ -36,6 +36,7 @@ export interface QualityScore {
  *  a report can be bad in several independent ways at once, and the floor is 0. */
 export const FACTOR_WEIGHTS = {
   reportAvailability: 40,
+  statementTieOut: 30,
   mappingCoverage: 25,
   balanceSheetIntegrity: 15,
   periodIncomplete: 12,
@@ -78,6 +79,12 @@ export interface ScoreInput {
   /** Days since the newest snapshot was fetched from QuickBooks. */
   daysSinceLastSync: number | null;
   periodIsIncomplete: boolean;
+  /**
+   * Whether the reported totals tie to QuickBooks' own subtotals for the same
+   * period. `null` means the check could not be run (no snapshot to compare
+   * against), which is not the same as passing and is not deducted for.
+   */
+  statementTieOut?: { ok: boolean; worstDifference: number; compared: number } | null;
 }
 
 function band(score: number): { band: QualityBand; label: string; confidence: 'high' | 'medium' | 'low' } {
@@ -255,9 +262,27 @@ export function computeQualityScore(input: ScoreInput): QualityScore {
     }
   }
 
+  // --- Tie-out to QuickBooks' own subtotals --------------------------------
+  // Checked last because it is the most severe finding: everything else says
+  // the bookkeeping could be cleaner, this says the figures do not match the
+  // source.
+  const tieOut = input.statementTieOut ?? null;
+  if (tieOut && tieOut.compared > 0 && !tieOut.ok) {
+    deduct(
+      'statementTieOut',
+      'Ties to QuickBooks',
+      FACTOR_WEIGHTS.statementTieOut,
+      `Reported totals differ from QuickBooks' own subtotals by up to ${formatCents(tieOut.worstDifference)}. The figures in this report should not be relied on until the difference is explained.`,
+    );
+  }
+
   const total = deductions.reduce((a, d) => a + d.points, 0);
   const raw = Math.max(0, Math.min(100, Math.round(100 - total)));
-  const score = input.hasProfitAndLoss ? raw : Math.min(raw, DISQUALIFYING_CAP);
+  // A report whose own totals do not match QuickBooks' totals is not a
+  // "needs review" report -- its figures are wrong. It is capped alongside a
+  // report with no income statement at all.
+  const disqualified = !input.hasProfitAndLoss || tieOut?.ok === false;
+  const score = disqualified ? Math.min(raw, DISQUALIFYING_CAP) : raw;
   const b = band(score);
 
   return {
@@ -267,6 +292,16 @@ export function computeQualityScore(input: ScoreInput): QualityScore {
     confidence: b.confidence,
     deductions: deductions.sort((a, d) => d.points - a.points),
   };
+}
+
+/** Money to the cent. A break of $0.01 must not print as "$0". */
+function formatCents(value: number): string {
+  return value.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function formatMoney(value: number): string {

@@ -111,10 +111,15 @@ export function buildPnlRows(
 /** Aggregates a set of monthly metrics into one period total (YTD, T12, ...). */
 export function aggregateMetrics(rows: MonthlyMetrics[], period: Period): MonthlyMetrics | null {
   if (rows.length === 0) return null;
-  const first = rows[0] as MonthlyMetrics;
-  const last = rows[rows.length - 1] as MonthlyMetrics;
+  // Balance-sheet values below are taken from the closing month, so the order
+  // matters. Every caller reads through an ORDER BY today, but relying on that
+  // would make a future unordered caller report the wrong closing cash with no
+  // visible symptom.
+  const ordered = [...rows].sort((a, b) => a.period.start.localeCompare(b.period.start));
+  const first = ordered[0] as MonthlyMetrics;
+  const last = ordered[ordered.length - 1] as MonthlyMetrics;
   const total = <K extends keyof MonthlyMetrics>(key: K): number =>
-    round2(rows.reduce((acc, r) => acc + ((r[key] as number) ?? 0), 0));
+    round2(ordered.reduce((acc, r) => acc + ((r[key] as number) ?? 0), 0));
 
   const netSales = total('netSales');
   const grossProfit = total('grossProfit');
@@ -174,7 +179,7 @@ export function aggregateMetrics(rows: MonthlyMetrics[], period: Period): Monthl
     unmappedOpexAmount: total('unmappedOpexAmount'),
     unmappedOpexPct: safeDivide(total('unmappedOpexAmount'), total('operatingExpenses')) ?? 0,
     balanceSheetBalanced: last.balanceSheetBalanced,
-    sourceSnapshotIds: rows.flatMap((r) => r.sourceSnapshotIds),
+    sourceSnapshotIds: ordered.flatMap((r) => r.sourceSnapshotIds),
     computedAt: new Date().toISOString(),
   };
 }
