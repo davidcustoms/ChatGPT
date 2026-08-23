@@ -501,7 +501,7 @@ async function expenseDrivers(companyId: string, period: Period): Promise<Resolv
       `Net income ${direction} ${formatCurrency(Math.abs(netChange))} from ${formatCurrency(previous.netIncome)} in ${monthLabel(prior)} to ${formatCurrency(current.netIncome)} in ${monthLabel(period)}.`,
       `Breaking that down: the change in sales volume accounts for ${formatCurrency(revenueEffect)}, the gross margin change for ${formatCurrency(marginEffect)}, and the change in operating expenses for ${formatCurrency(opexEffect)}${Math.abs(otherEffect) >= 1 ? `, with ${formatCurrency(otherEffect)} from other income and expense` : ''}.`,
       revChange !== null && opexChange !== null
-        ? `Revenue changed ${formatPercent(revChange, 1, { signed: true })} while operating expenses changed ${formatPercent(opexChange, 1, { signed: true })}, so expenses grew ${opexChange > revChange ? 'faster' : 'slower'} than sales.`
+        ? `Revenue changed ${formatPercent(revChange, 1, { signed: true })} while operating expenses changed ${formatPercent(opexChange, 1, { signed: true })}, so ${describeCostLeverage(revChange, opexChange)}.`
         : '',
       increases.length
         ? `Largest expense increases: ${increases.map((m) => `${m.category} ${formatCurrency(m.change_amount)} to ${formatCurrency(m.current)}`).join('; ')}.`
@@ -542,8 +542,35 @@ async function expenseDrivers(companyId: string, period: Period): Promise<Resolv
         other_effect: otherEffect,
       },
       categories: movers.slice(0, 15),
+      // The categories the summary actually names. Held separately from the
+      // top-15 list so every figure stated in the answer is present in the
+      // structured result the model is given -- a number in the prose that is
+      // absent from the data would be unverifiable.
+      largest_increases: increases,
+      largest_reductions: decreases,
     },
   };
+}
+
+/**
+ * Says what the relationship between revenue and cost growth means.
+ *
+ * "Expenses grew faster than sales" is wrong when both fell: costs did not
+ * grow at all. An owner reading a cost line needs the direction stated
+ * plainly, so each of the four cases gets its own sentence.
+ */
+function describeCostLeverage(revChange: number, opexChange: number): string {
+  if (opexChange > revChange) {
+    return revChange < 0 && opexChange < 0
+      ? 'costs came down more slowly than revenue did'
+      : 'costs grew faster than sales';
+  }
+  if (opexChange < revChange) {
+    return revChange < 0 && opexChange < 0
+      ? 'costs came down faster than revenue did'
+      : 'costs grew more slowly than sales';
+  }
+  return 'costs moved in step with sales';
 }
 
 async function categoryDetail(

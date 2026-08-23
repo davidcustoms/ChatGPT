@@ -28,51 +28,122 @@ export interface TransactionInput {
   }>;
 }
 
+/**
+ * Upserts transactions and their lines.
+ *
+ * Written as batched multi-row statements rather than a row at a time: a
+ * 250,000-transaction import is ~750,000 round trips the naive way, which
+ * dominates the wall-clock cost of a first sync. Batching keeps the same
+ * semantics -- the ON CONFLICT target is still (company, type, QuickBooks id),
+ * so re-importing a month is a no-op, and lines are replaced rather than
+ * appended so a corrected transaction never leaves an orphan line behind.
+ */
+
+/** Rows per statement. Postgres caps a statement at 65,535 bind parameters. */
+const TXN_COLUMNS = 12;
+const LINE_COLUMNS = 13;
+const TXN_BATCH = 500;
+const LINE_BATCH = 500;
+
+function placeholders(rowCount: number, columnCount: number, offset = 0): string {
+  const rows: string[] = [];
+  for (let r = 0; r < rowCount; r += 1) {
+    const start = offset + r * columnCount;
+    const cells = Array.from({ length: columnCount }, (_, c) => `$${start + c + 1}`);
+    rows.push(`(${cells.join(',')})`);
+  }
+  return rows.join(',');
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 export async function upsertTransactions(
   companyId: string,
   transactions: TransactionInput[],
 ): Promise<number> {
   if (transactions.length === 0) return 0;
+
+  // QuickBooks can return the same id twice within one page set. Keep the last
+  // occurrence: a multi-row INSERT cannot resolve a conflict against a row in
+  // its own VALUES list.
+  const deduped = new Map<string, TransactionInput>();
+  for (const t of transactions) deduped.set(`${t.txnType}::${t.qboId}`, t);
+  const unique = Array.from(deduped.values());
+
   await withTransaction(async (client) => {
-    for (const t of transactions) {
-      const res = await client.query<{ id: string }>(
+    const idByKey = new Map<string, string>();
+
+    for (const batch of chunk(unique, TXN_BATCH)) {
+      const values: unknown[] = [];
+      for (const t of batch) {
+        values.push(
+          companyId, t.qboId, t.txnType, t.txnDate, t.docNumber ?? null, t.entityType ?? null,
+          t.entityQboId ?? null, t.entityName ?? null, t.memo ?? null, t.totalAmount,
+          t.locationQboId ?? null, t.classQboId ?? null,
+        );
+      }
+      const res = await client.query<{ id: string; qbo_id: string; txn_type: string }>(
         `INSERT INTO transactions
            (company_id, qbo_id, txn_type, txn_date, doc_number, entity_type, entity_qbo_id,
-            entity_name, memo, total_amount, location_qbo_id, class_qbo_id, source_fetched_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+            entity_name, memo, total_amount, location_qbo_id, class_qbo_id)
+         VALUES ${placeholders(batch.length, TXN_COLUMNS)}
          ON CONFLICT (company_id, txn_type, qbo_id) DO UPDATE SET
            txn_date = EXCLUDED.txn_date, doc_number = EXCLUDED.doc_number,
            entity_type = EXCLUDED.entity_type, entity_qbo_id = EXCLUDED.entity_qbo_id,
            entity_name = EXCLUDED.entity_name, memo = EXCLUDED.memo,
            total_amount = EXCLUDED.total_amount, location_qbo_id = EXCLUDED.location_qbo_id,
            class_qbo_id = EXCLUDED.class_qbo_id, source_fetched_at = now()
-         RETURNING id`,
-        [
-          companyId, t.qboId, t.txnType, t.txnDate, t.docNumber ?? null, t.entityType ?? null,
-          t.entityQboId ?? null, t.entityName ?? null, t.memo ?? null, t.totalAmount,
-          t.locationQboId ?? null, t.classQboId ?? null,
-        ],
+         RETURNING id, qbo_id, txn_type`,
+        values,
       );
-      const txnId = res.rows[0]?.id;
-      if (!txnId || !t.lines?.length) continue;
-      await client.query('DELETE FROM transaction_lines WHERE transaction_id = $1', [txnId]);
-      for (const l of t.lines) {
-        await client.query(
-          `INSERT INTO transaction_lines
-             (transaction_id, company_id, line_num, description, amount, account_qbo_id, account_name,
-              item_qbo_id, class_qbo_id, location_qbo_id, customer_qbo_id, quantity, detail_type)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-          [
-            txnId, companyId, l.lineNum ?? null, l.description ?? null, l.amount,
-            l.accountQboId ?? null, l.accountName ?? null, l.itemQboId ?? null,
-            l.classQboId ?? null, l.locationQboId ?? null, l.customerQboId ?? null,
-            l.quantity ?? null, l.detailType ?? null,
-          ],
-        );
+      for (const row of res.rows) idByKey.set(`${row.txn_type}::${row.qbo_id}`, row.id);
+    }
+
+    // Replace the line items of every transaction that carries them. A
+    // transaction that arrived with no lines keeps whatever it already had,
+    // because an empty Line array from QuickBooks means "not expanded here",
+    // not "this transaction has no lines".
+    const withLines = unique.filter((t) => (t.lines?.length ?? 0) > 0);
+    if (withLines.length === 0) return;
+
+    const txnIds = withLines
+      .map((t) => idByKey.get(`${t.txnType}::${t.qboId}`))
+      .filter((id): id is string => id !== undefined);
+
+    for (const batch of chunk(txnIds, TXN_BATCH)) {
+      await client.query('DELETE FROM transaction_lines WHERE transaction_id = ANY($1::uuid[])', [batch]);
+    }
+
+    const lineRows: unknown[][] = [];
+    for (const t of withLines) {
+      const txnId = idByKey.get(`${t.txnType}::${t.qboId}`);
+      if (!txnId) continue;
+      for (const l of t.lines ?? []) {
+        lineRows.push([
+          txnId, companyId, l.lineNum ?? null, l.description ?? null, l.amount,
+          l.accountQboId ?? null, l.accountName ?? null, l.itemQboId ?? null,
+          l.classQboId ?? null, l.locationQboId ?? null, l.customerQboId ?? null,
+          l.quantity ?? null, l.detailType ?? null,
+        ]);
       }
     }
+
+    for (const batch of chunk(lineRows, LINE_BATCH)) {
+      await client.query(
+        `INSERT INTO transaction_lines
+           (transaction_id, company_id, line_num, description, amount, account_qbo_id, account_name,
+            item_qbo_id, class_qbo_id, location_qbo_id, customer_qbo_id, quantity, detail_type)
+         VALUES ${placeholders(batch.length, LINE_COLUMNS)}`,
+        batch.flat(),
+      );
+    }
   });
-  return transactions.length;
+
+  return unique.length;
 }
 
 export interface TransactionRow {

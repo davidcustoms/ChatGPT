@@ -14,7 +14,9 @@
     "db:seed-demo": "tsx scripts/seed-demo.ts",
     "cron:monthly": "tsx scripts/run-monthly.ts",
     "validate:qbo": "tsx scripts/validate-live-qbo.ts",
-    "reconcile": "tsx scripts/reconcile.ts"
+    "reconcile": "tsx scripts/reconcile.ts",
+    "chat:qa": "tsx scripts/chat-qa.ts",
+    "benchmark": "tsx scripts/benchmark.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.6",
