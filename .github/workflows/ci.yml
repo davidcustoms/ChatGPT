@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
-    name: Build & Test
+  chronoquest:
+    name: ChronoQuest — Build & Test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,6 +29,65 @@ jobs:
 
       - name: Run tests
         run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  qbo-cfo:
+    name: CFO Reporting Agent — Typecheck, Test & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qbo-cfo
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: qbo_cfo
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Test-only values. Real secrets are never committed; the Intuit and
+      # OpenAI keys are deliberately absent so the suite exercises the
+      # unconfigured paths as well.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/qbo_cfo
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      TOKEN_ENCRYPTION_KEY: Y2ktdG9rZW4tZW5jcnlwdGlvbi1rZXktMzJieXRlcyE=
+      SESSION_SECRET: Y2ktc2Vzc2lvbi1zZWNyZXQtdmFsdWUtMzJieXRlcyEhIQ==
+      CRON_SECRET: ci-cron-secret
+      OWNER_EMAIL: ci@example.invalid
+      OWNER_PASSWORD: ci-owner-password
+      DEMO_MODE: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: qbo-cfo/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply database schema
+        run: npm run db:migrate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
 
       - name: Build
         run: npm run build

@@ -1,0 +1,222 @@
+import { formatCurrency, formatPercent } from '../util/format';
+import { safeDivide } from './math';
+import type { MonthlyMetrics } from './types';
+import { isPeriodIncomplete, type Period } from '../util/dates';
+
+/**
+ * Pre-report validation and the "Report Confidence" score shown on the monthly
+ * close page. Every check states what is wrong in plain language rather than
+ * failing silently.
+ */
+
+export type CheckStatus = 'pass' | 'warn' | 'fail';
+
+export interface QualityCheck {
+  key: string;
+  label: string;
+  status: CheckStatus;
+  message: string;
+  /** Where the owner should go to fix it. */
+  action?: { label: string; href: string };
+}
+
+export interface QualityReport {
+  checks: QualityCheck[];
+  confidence: 'high' | 'medium' | 'low';
+  reasons: string[];
+  blocking: boolean;
+}
+
+export interface QualityInput {
+  period: Period;
+  metrics: MonthlyMetrics | null;
+  expectedCompanyName: string | null;
+  connectedCompanyName: string | null;
+  unmappedExpenseAccountCount: number;
+  uncategorizedBalances: Array<{ accountName: string; amount: number }>;
+  unreconciledNote?: string | null;
+  missingDimension?: { missing: number; total: number } | null;
+  requireLocationData: boolean;
+  locationRowCount: number;
+  negativeInventoryItems: string[];
+  duplicateSnapshotCount: number;
+  oldReceivables90Plus: number | null;
+  oldPayables90Plus: number | null;
+  today?: Date;
+}
+
+export function evaluateDataQuality(input: QualityInput): QualityReport {
+  const checks: QualityCheck[] = [];
+  const m = input.metrics;
+
+  checks.push(
+    m && (m.netSales !== 0 || m.operatingExpenses !== 0)
+      ? { key: 'pnl_present', label: 'Profit & Loss totals present', status: 'pass', message: 'QuickBooks returned a complete Profit & Loss for the period.' }
+      : {
+          key: 'pnl_present',
+          label: 'Profit & Loss totals present',
+          status: 'fail',
+          message: 'No Profit & Loss data is stored for this period. Run a sync before generating the report.',
+          action: { label: 'Sync QuickBooks', href: '/settings/quickbooks' },
+        },
+  );
+
+  if (m?.balanceSheetBalanced === null || m?.balanceSheetBalanced === undefined) {
+    checks.push({
+      key: 'bs_balanced',
+      label: 'Balance sheet balances',
+      status: 'warn',
+      message: 'No Balance Sheet was captured for this period, so balance-sheet sections will be omitted.',
+    });
+  } else if (m.balanceSheetBalanced) {
+    checks.push({
+      key: 'bs_balanced',
+      label: 'Balance sheet balances',
+      status: 'pass',
+      message: 'Total assets equal total liabilities plus equity.',
+    });
+  } else {
+    checks.push({
+      key: 'bs_balanced',
+      label: 'Balance sheet balances',
+      status: 'fail',
+      message: `Assets of ${formatCurrency(m.totalAssets)} do not equal liabilities plus equity of ${formatCurrency((m.totalLiabilities ?? 0) + (m.equity ?? 0))}. The stored balance sheet is incomplete.`,
+    });
+  }
+
+  const incomplete = isPeriodIncomplete(input.period, input.today);
+  checks.push({
+    key: 'period_complete',
+    label: 'Reporting month is complete',
+    status: incomplete ? 'warn' : 'pass',
+    message: incomplete
+      ? `${input.period.start.slice(0, 7)} has not finished yet. Figures are partial and will change.`
+      : 'The reporting month has closed.',
+  });
+
+  const companyMatches =
+    !input.expectedCompanyName ||
+    !input.connectedCompanyName ||
+    input.expectedCompanyName.trim().toLowerCase() === input.connectedCompanyName.trim().toLowerCase();
+  checks.push({
+    key: 'company_match',
+    label: 'QuickBooks company matches',
+    status: companyMatches ? 'pass' : 'warn',
+    message: companyMatches
+      ? 'The connected QuickBooks company matches this workspace.'
+      : `This workspace is named "${input.expectedCompanyName}" but the connected QuickBooks company is "${input.connectedCompanyName}".`,
+    action: companyMatches ? undefined : { label: 'Review connection', href: '/settings/quickbooks' },
+  });
+
+  checks.push({
+    key: 'duplicate_import',
+    label: 'No duplicate imports',
+    status: input.duplicateSnapshotCount > 0 ? 'warn' : 'pass',
+    message:
+      input.duplicateSnapshotCount > 0
+        ? `${input.duplicateSnapshotCount} duplicate snapshot(s) were detected for this period.`
+        : 'Each period is stored exactly once.',
+  });
+
+  const unmappedPct = m?.unmappedOpexPct ?? 0;
+  if (input.unmappedExpenseAccountCount === 0 && unmappedPct === 0) {
+    checks.push({
+      key: 'mapping_coverage',
+      label: 'Account mapping coverage',
+      status: 'pass',
+      message: 'Every active expense account is mapped to a management category.',
+    });
+  } else {
+    const severe = unmappedPct >= 0.1;
+    checks.push({
+      key: 'mapping_coverage',
+      label: 'Account mapping coverage',
+      status: severe ? 'fail' : 'warn',
+      message: `${formatPercent(unmappedPct)} of operating expenses are currently unmapped${input.unmappedExpenseAccountCount ? ` across ${input.unmappedExpenseAccountCount} account(s)` : ''}.`,
+      action: { label: 'Review mappings', href: '/settings/account-mapping' },
+    });
+  }
+
+  const uncategorizedTotal = input.uncategorizedBalances.reduce((a, b) => a + Math.abs(b.amount), 0);
+  checks.push({
+    key: 'uncategorized',
+    label: 'Uncategorised / suspense accounts',
+    status: uncategorizedTotal >= 1000 ? 'warn' : 'pass',
+    message:
+      uncategorizedTotal > 0
+        ? `${formatCurrency(uncategorizedTotal)} sits in uncategorised or suspense accounts.`
+        : 'No material balances in uncategorised or suspense accounts.',
+  });
+
+  if (input.requireLocationData) {
+    checks.push({
+      key: 'location_data',
+      label: 'Location / class data available',
+      status: input.locationRowCount > 0 ? 'pass' : 'fail',
+      message:
+        input.locationRowCount > 0
+          ? `${input.locationRowCount} location/class segments captured for the period.`
+          : 'Location reporting was requested but QuickBooks returned no location or class breakdown.',
+      action: { label: 'Configure locations', href: '/settings/locations' },
+    });
+  }
+
+  if (input.missingDimension && input.missingDimension.total > 0) {
+    const ratio = safeDivide(input.missingDimension.missing, input.missingDimension.total) ?? 0;
+    checks.push({
+      key: 'dimension_coverage',
+      label: 'Location/class assignment on transactions',
+      status: ratio >= 0.2 ? 'warn' : 'pass',
+      message: `${formatPercent(ratio)} of transactions in the period have no location or class assigned.`,
+    });
+  }
+
+  if (input.negativeInventoryItems.length > 0) {
+    checks.push({
+      key: 'negative_inventory',
+      label: 'Negative inventory',
+      status: 'warn',
+      message: `${input.negativeInventoryItems.length} item(s) have a negative quantity on hand: ${input.negativeInventoryItems.slice(0, 5).join(', ')}${input.negativeInventoryItems.length > 5 ? '…' : ''}.`,
+    });
+  }
+
+  if (input.oldReceivables90Plus !== null && input.oldReceivables90Plus > 0) {
+    checks.push({
+      key: 'old_ar',
+      label: 'Aged receivables',
+      status: 'warn',
+      message: `${formatCurrency(input.oldReceivables90Plus)} of receivables are more than 90 days old.`,
+      action: { label: 'Open receivables', href: '/receivables' },
+    });
+  }
+  if (input.oldPayables90Plus !== null && input.oldPayables90Plus > 0) {
+    checks.push({
+      key: 'old_ap',
+      label: 'Aged payables',
+      status: 'warn',
+      message: `${formatCurrency(input.oldPayables90Plus)} of payables are more than 90 days old.`,
+      action: { label: 'Open payables', href: '/payables' },
+    });
+  }
+
+  if (input.unreconciledNote) {
+    checks.push({
+      key: 'reconciliation',
+      label: 'Account reconciliation',
+      status: 'warn',
+      message: input.unreconciledNote,
+    });
+  }
+
+  const failures = checks.filter((c) => c.status === 'fail');
+  const warnings = checks.filter((c) => c.status === 'warn');
+  const confidence: QualityReport['confidence'] =
+    failures.length > 0 ? 'low' : warnings.length >= 3 ? 'medium' : warnings.length > 0 ? 'medium' : 'high';
+
+  return {
+    checks,
+    confidence,
+    reasons: [...failures, ...warnings].map((c) => c.message),
+    blocking: checks.some((c) => c.key === 'pnl_present' && c.status === 'fail'),
+  };
+}
